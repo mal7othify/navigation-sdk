@@ -1,0 +1,15 @@
+[package]
+name = "navcore-ffi"
+description = "UniFFI bindings layer over navcore. Thin wrappers only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "navcore_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+navcore = { path = "../navcore" }

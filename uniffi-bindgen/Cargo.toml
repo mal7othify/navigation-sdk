@@ -1,0 +1,14 @@
+[package]
+name = "uniffi-bindgen"
+description = "Binary used to generate Kotlin/Swift bindings: `cargo run -p uniffi-bindgen -- generate ...`"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
