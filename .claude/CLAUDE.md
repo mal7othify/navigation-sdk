@@ -377,13 +377,13 @@ Targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`. Min i
 
 ## Acceptance checklist
 
-- [ ] `scripts/check.sh` green
-- [ ] HMM matcher beats simple matcher on `route_parallel_roads` and `route_uturn`
-- [ ] Kalman reduces RMS error ≥ 40% on `route_simple`
-- [ ] No allocations in `update_location` hot path (verify with `dhat` or a counting allocator in a test)
-- [ ] Both demos replay the fixture to arrival
-- [ ] No panics reachable from FFI (grep for `unwrap`/`expect` in `navcore-ffi`; none allowed)
-- [ ] Generated bindings are gitignored and reproducible from `gen-bindings.sh`
+- [x] `scripts/check.sh` green
+- [x] HMM matcher beats simple matcher on `route_parallel_roads` (0 vs 9 errors) and `route_uturn` (0 vs 18)
+- [x] Kalman reduces RMS error ≥ 40% on `route_simple` (−61 %)
+- [x] No allocations in `update_location` hot path (`crates/navcore/tests/no_alloc.rs`, counting allocator)
+- [x] Both demos replay the fixture to arrival (Android instrumented test on emulator, iOS XCTest on simulator)
+- [x] No panics reachable from FFI (`scripts/check.sh` greps `navcore-ffi/src` for `unwrap`/`expect`)
+- [x] Generated bindings are gitignored and reproducible from `gen-bindings.sh`
 
 ## Future (not in POC)
 
