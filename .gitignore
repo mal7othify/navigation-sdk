@@ -10,9 +10,10 @@ Cargo.lock.bak
 *.xcframework/
 
 # Generated UniFFI bindings (reproduce with scripts/gen-bindings.sh)
-android/navsdk/src/main/kotlin/uniffi/
+android/navsdk/src/main/kotlin/com/navsdk/core/
 android/navsdk/src/main/jniLibs/
 ios/NavSDK/Sources/NavSDK/Generated/
+ios/NavSDK/Generated/
 ios/NavSDK/NavCoreFFI.xcframework/
 
 # Android

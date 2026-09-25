@@ -12,4 +12,6 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-navcore = { path = "../navcore" }
+navcore = { path = "../navcore", features = ["serde"] }
+uniffi = { workspace = true }
+thiserror = "2"

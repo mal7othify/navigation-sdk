@@ -1,4 +1,4 @@
-//! UniFFI bindgen binary. Wired to `uniffi::uniffi_bindgen_main()` in Phase 5.
+//! UniFFI bindgen binary. Invoked by `scripts/gen-bindings.sh`.
 fn main() {
-    eprintln!("uniffi-bindgen: not yet wired (Phase 5)");
+    uniffi::uniffi_bindgen_main()
 }

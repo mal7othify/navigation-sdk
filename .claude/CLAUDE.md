@@ -83,6 +83,16 @@ Decisions made while resolving gaps in the plan (keep consistent):
 - Routes follow the OSRM step convention: the manoeuvre is at the *start* of a step, and the last step is a
   zero-length `Arrive` step at the final vertex. `Route::validate` enforces this.
 - Fixtures are regenerated with `cargo run -p navcore --features serde --example gen_fixtures`; never hand-edit them.
+- UniFFI 0.32, proc-macros only, namespace `navcore`. Config lives in `crates/navcore-ffi/uniffi.toml` and is picked up
+  automatically in `--library` mode (do not pass `--config`; that flag now means a global config file).
+- Generated files: `android/navsdk/src/main/kotlin/com/navsdk/core/navcore.kt` (package `com.navsdk.core`),
+  `ios/NavSDK/Sources/NavSDK/Generated/NavCore.swift`, and `ios/NavSDK/Generated/NavCoreFFI.{h,modulemap}`. The
+  Swift module is `NavCore` and the C module `NavCoreFFI`, so the file names are capitalised, unlike the plan's
+  `navcore.swift`. The header and modulemap sit outside `Sources/` so SwiftPM does not see a mixed-language target.
+- FFI indices are `u32` (UniFFI has no `usize`); `Route::from_json` is the free function `route_from_json` because
+  UniFFI records cannot carry methods. Release profile does **not** set `panic = "abort"` so UniFFI's panic guard can
+  surface an unexpected panic as a host exception rather than kill the app.
+- The stable toolchain must be ≥ 1.91 (UniFFI 0.32's dependencies); `rustup update stable` if the build complains.
 - All tunables live in one `NavigatorConfig` struct with `Default` impl matching the values in this document.
 - Geometry is hand-written (haversine, bearing, segment projection); no `geo` crate.
 - Hot-loop scratch buffers (HMM window, candidate lists) are fixed-capacity and owned by `Navigator`.

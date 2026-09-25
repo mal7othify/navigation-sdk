@@ -1,0 +1,11 @@
+[bindings.kotlin]
+package_name = "com.navsdk.core"
+cdylib_name = "navcore_ffi"
+android = true
+android_cleaner = true
+
+[bindings.swift]
+module_name = "NavCore"
+ffi_module_name = "NavCoreFFI"
+cdylib_name = "navcore_ffi"
+generate_module_map = true

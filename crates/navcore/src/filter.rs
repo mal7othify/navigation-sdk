@@ -275,11 +275,10 @@ impl LocationFilter {
             }
         }
         // Symmetrise to fight drift.
-        for r_ in 0..4 {
-            for c in (r_ + 1)..4 {
-                let m = 0.5 * (np[r_][c] + np[c][r_]);
-                np[r_][c] = m;
-                np[c][r_] = m;
+        let sym = np;
+        for (r_, row) in np.iter_mut().enumerate() {
+            for (c, v) in row.iter_mut().enumerate() {
+                *v = 0.5 * (sym[r_][c] + sym[c][r_]);
             }
         }
         self.p = np;

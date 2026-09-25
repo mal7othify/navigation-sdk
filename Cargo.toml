@@ -12,11 +12,15 @@ edition = "2021"
 license = "MIT"
 rust-version = "1.80"
 
+[workspace.dependencies]
+uniffi = "0.32"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
 opt-level = 3
-panic = "abort"
+# Keep unwinding so UniFFI's scaffolding can turn an unexpected panic into a
+# host-side exception instead of aborting the app.
 strip = true
 
 [profile.bench]
