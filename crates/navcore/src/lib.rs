@@ -7,6 +7,9 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod filter;
+#[cfg(feature = "serde")]
+pub mod fixtures;
 pub mod geo;
 pub mod types;
 
