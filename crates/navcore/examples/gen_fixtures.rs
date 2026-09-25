@@ -31,8 +31,9 @@ impl Rng {
 /// carrying the manoeuvre performed *at* it.
 struct Sketch {
     frame: LocalFrame,
-    /// `(corner, maneuver, instruction)`; the first is `Depart`, the last `Arrive`.
-    corners: Vec<(Enu, ManeuverType, &'static str)>,
+    /// `(corner, maneuver, instruction)`; the first is `Depart`, the last
+    /// `Arrive`. `None` is a geometry-only bend with no step boundary.
+    corners: Vec<(Enu, Option<ManeuverType>, &'static str)>,
     /// Vertex spacing when densifying straight legs, metres.
     spacing_m: f64,
 }
@@ -40,30 +41,34 @@ struct Sketch {
 impl Sketch {
     fn build(&self) -> Route {
         let mut geometry: Vec<GeoPoint> = Vec::new();
-        let mut corner_vertex: Vec<usize> = Vec::new();
-        for (i, (c, _, _)) in self.corners.iter().enumerate() {
+        // (vertex index, maneuver, instruction) for step boundaries only.
+        let mut boundaries: Vec<(usize, ManeuverType, &'static str)> = Vec::new();
+        for (i, (c, maneuver, text)) in self.corners.iter().enumerate() {
             if i == 0 {
                 geometry.push(self.frame.to_geo(*c));
-                corner_vertex.push(0);
-                continue;
+            } else {
+                let prev = self.corners[i - 1].0;
+                let len = prev.distance_to(*c);
+                let n = (len / self.spacing_m).ceil().max(1.0) as usize;
+                for k in 1..=n {
+                    let t = k as f64 / n as f64;
+                    let p = Enu::new(prev.x + t * (c.x - prev.x), prev.y + t * (c.y - prev.y));
+                    geometry.push(self.frame.to_geo(p));
+                }
             }
-            let prev = self.corners[i - 1].0;
-            let len = prev.distance_to(*c);
-            let n = (len / self.spacing_m).ceil().max(1.0) as usize;
-            for k in 1..=n {
-                let t = k as f64 / n as f64;
-                let p = Enu::new(prev.x + t * (c.x - prev.x), prev.y + t * (c.y - prev.y));
-                geometry.push(self.frame.to_geo(p));
+            if let Some(m) = maneuver {
+                boundaries.push((geometry.len() - 1, *m, text));
             }
-            corner_vertex.push(geometry.len() - 1);
         }
         let index = RouteIndex::new(&geometry).expect("sketch geometry valid");
-        let steps = (0..self.corners.len() - 1)
-            .map(|i| {
-                let (start, end) = (corner_vertex[i], corner_vertex[i + 1]);
+        let steps = boundaries
+            .windows(2)
+            .map(|w| {
+                let (start, maneuver, text) = w[0];
+                let end = w[1].0;
                 RouteStep {
-                    instruction: self.corners[i].2.to_string(),
-                    maneuver: self.corners[i].1,
+                    instruction: text.to_string(),
+                    maneuver,
                     start_index: start,
                     end_index: end,
                     distance_m: index.cumulative_m(end) - index.cumulative_m(start),
@@ -81,6 +86,9 @@ struct DriveParams {
     ramp_m: f64,
     /// Stationary fixes emitted before departure.
     idle_fixes: usize,
+    /// `(route distance, fix count)`: stop for this many fixes on first
+    /// reaching that distance (e.g. waiting to make a U-turn).
+    pause: Option<(f64, usize)>,
     /// Reported accuracy is uniform in this range; noise σ equals it.
     accuracy_range_m: (f64, f64),
     speed_noise_mps: f64,
@@ -129,7 +137,19 @@ fn simulate(
     }
 
     let mut d = 0.0;
+    let mut paused = false;
     while d < total {
+        if let Some((at, count)) = p.pause {
+            if !paused && d >= at {
+                paused = true;
+                let pos = index.point_at_distance(d);
+                let seg = index.segment_at_distance(d);
+                for _ in 0..count {
+                    emit(pos, 0.0, Some(index.segment_bearing_rad(seg)), ts, &mut rng);
+                    ts += 1000;
+                }
+            }
+        }
         let nearest_corner = corners_m
             .iter()
             .map(|c| (c - d).abs())
@@ -174,22 +194,22 @@ fn route_simple() -> Fixture {
         corners: vec![
             (
                 Enu::new(0.0, 0.0),
-                ManeuverType::Depart,
+                Some(ManeuverType::Depart),
                 "Head east on Start Street",
             ),
             (
                 Enu::new(800.0, 0.0),
-                ManeuverType::TurnRight,
+                Some(ManeuverType::TurnRight),
                 "Turn right onto South Avenue",
             ),
             (
                 Enu::new(800.0, -600.0),
-                ManeuverType::TurnLeft,
+                Some(ManeuverType::TurnLeft),
                 "Turn left onto East Road",
             ),
             (
                 Enu::new(1700.0, -600.0),
-                ManeuverType::Arrive,
+                Some(ManeuverType::Arrive),
                 "Arrive at destination",
             ),
         ],
@@ -205,6 +225,7 @@ fn route_simple() -> Fixture {
             corner_mps: 4.0,
             ramp_m: 60.0,
             idle_fixes: 5,
+            pause: None,
             accuracy_range_m: (6.0, 12.0),
             speed_noise_mps: 0.5,
             course_noise_deg: 6.0,
@@ -224,9 +245,125 @@ fn route_simple() -> Fixture {
     }
 }
 
+/// Out-and-back on a divided road: the return carriageway runs 30 m north of
+/// the outbound one in the opposite direction. Noisy fixes mid-leg regularly
+/// land closer to the wrong carriageway; heading and continuity disambiguate.
+fn route_parallel_roads() -> Fixture {
+    let frame = LocalFrame::new(GeoPoint::new(48.8566, 2.3522));
+    let sketch = Sketch {
+        frame,
+        corners: vec![
+            (
+                Enu::new(0.0, 0.0),
+                Some(ManeuverType::Depart),
+                "Head east on Divided Highway",
+            ),
+            (
+                Enu::new(1000.0, 0.0),
+                Some(ManeuverType::UTurn),
+                "Make a U-turn at the crossover",
+            ),
+            (Enu::new(1000.0, 30.0), None, ""),
+            (
+                Enu::new(0.0, 30.0),
+                Some(ManeuverType::Arrive),
+                "Arrive at destination",
+            ),
+        ],
+        spacing_m: 50.0,
+    };
+    let route = sketch.build();
+    let corners = corner_distances(&route);
+    let (trace, truth) = simulate(
+        &route,
+        &corners,
+        &DriveParams {
+            cruise_mps: 15.0,
+            corner_mps: 5.0,
+            ramp_m: 60.0,
+            idle_fixes: 3,
+            pause: None,
+            accuracy_range_m: (8.0, 12.0),
+            speed_noise_mps: 0.5,
+            course_noise_deg: 6.0,
+            seed: 0x5EED_0002,
+        },
+    );
+    Fixture {
+        name: "route_parallel_roads".into(),
+        route,
+        trace,
+        truth,
+        expected: Expected {
+            step_sequence: vec![0, 1],
+            off_route_ranges: vec![],
+            arrives: true,
+        },
+    }
+}
+
+/// A U-turn on a two-lane road: the return lane is only 8 m from the
+/// outbound lane. The vehicle waits 6 s at the turn before taking it. The
+/// matcher must stay on the outbound leg until the vehicle actually heads
+/// back west. The destination is 100 m short of the start so the first fixes
+/// are unambiguous, as in a real trip.
+fn route_uturn() -> Fixture {
+    let frame = LocalFrame::new(GeoPoint::new(40.7128, -74.0060));
+    let sketch = Sketch {
+        frame,
+        corners: vec![
+            (
+                Enu::new(0.0, 0.0),
+                Some(ManeuverType::Depart),
+                "Head east on Main Street",
+            ),
+            (
+                Enu::new(600.0, 0.0),
+                Some(ManeuverType::UTurn),
+                "Make a U-turn",
+            ),
+            (Enu::new(600.0, -8.0), None, ""),
+            (
+                Enu::new(100.0, -8.0),
+                Some(ManeuverType::Arrive),
+                "Arrive at destination",
+            ),
+        ],
+        spacing_m: 40.0,
+    };
+    let route = sketch.build();
+    let corners = corner_distances(&route);
+    let (trace, truth) = simulate(
+        &route,
+        &corners,
+        &DriveParams {
+            cruise_mps: 12.0,
+            corner_mps: 3.0,
+            ramp_m: 50.0,
+            idle_fixes: 3,
+            pause: Some((600.0, 6)),
+            accuracy_range_m: (8.0, 12.0),
+            speed_noise_mps: 0.5,
+            course_noise_deg: 6.0,
+            seed: 0x5EED_0003,
+        },
+    );
+    Fixture {
+        name: "route_uturn".into(),
+        route,
+        trace,
+        truth,
+        expected: Expected {
+            step_sequence: vec![0, 1],
+            off_route_ranges: vec![],
+            arrives: true,
+        },
+    }
+}
+
 /// Every fixture the repo ships. Add new generators here.
 fn all_fixtures() -> Vec<Fixture> {
-    vec![route_simple()]
+    vec![route_simple(), route_parallel_roads(), route_uturn()]
 }
 
 fn main() {

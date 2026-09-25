@@ -233,8 +233,6 @@ pub enum NavError {
     },
     /// The fix has a non-finite or out-of-range coordinate.
     InvalidLocation,
-    /// No route candidate could be found for the fix.
-    NoMatch,
     /// JSON could not be parsed into a route.
     InvalidJson(String),
 }
@@ -258,7 +256,6 @@ impl fmt::Display for NavError {
                 "implausible location: implied speed {implied_speed_mps:.1} m/s exceeds {max_speed_mps:.1} m/s"
             ),
             NavError::InvalidLocation => write!(f, "invalid location coordinate"),
-            NavError::NoMatch => write!(f, "no route candidate matched the location"),
             NavError::InvalidJson(reason) => write!(f, "invalid json: {reason}"),
         }
     }

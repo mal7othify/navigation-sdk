@@ -11,6 +11,7 @@ pub mod filter;
 #[cfg(feature = "serde")]
 pub mod fixtures;
 pub mod geo;
+pub mod matcher;
 pub mod types;
 
 pub use types::{

@@ -270,7 +270,7 @@ impl PointDistance for Segment {
 }
 
 /// A point projected onto the route, with route-relative measures.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RouteProjection {
     /// Segment `geometry[i]..geometry[i+1]` the projection lies on.
     pub segment_index: usize,

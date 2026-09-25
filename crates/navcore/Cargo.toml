@@ -27,6 +27,10 @@ criterion = "0.5"
 name = "geo"
 harness = false
 
+[[bench]]
+name = "matcher"
+harness = false
+
 [[example]]
 name = "gen_fixtures"
 required-features = ["serde"]

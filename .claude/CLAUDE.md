@@ -89,6 +89,11 @@ Benchmark baselines (Apple Silicon, release, `cargo bench -p navcore`):
 | `nearest_segment_2000` | 1 | ~138 ns |
 | `segments_within_50m_2000` | 1 | ~103 ns |
 | `haversine` | 1 | ~18 ns |
+| `hmm_match_fix_2000` | 3 | ~360 ns |
+| `simple_match_fix_2000` | 3 | ~152 ns |
+
+Fixture results (raw fixes, σ = reported accuracy): `route_parallel_roads` HMM 0 wrong-carriageway fixes vs simple 9;
+`route_uturn` HMM 0 wrong-lane fixes vs simple 18. Kalman on `route_simple`: raw RMS 12.7 m → filtered 4.9 m (−61 %).
 
 ## Global conventions
 
