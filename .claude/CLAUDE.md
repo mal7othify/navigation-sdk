@@ -81,6 +81,15 @@ Decisions made while resolving gaps in the plan (keep consistent):
 - Geometry is hand-written (haversine, bearing, segment projection); no `geo` crate.
 - Hot-loop scratch buffers (HMM window, candidate lists) are fixed-capacity and owned by `Navigator`.
 
+Benchmark baselines (Apple Silicon, release, `cargo bench -p navcore`):
+
+| Bench | Phase | Result |
+|---|---|---|
+| `route_index_build_2000` | 1 | ~346 µs |
+| `nearest_segment_2000` | 1 | ~138 ns |
+| `segments_within_50m_2000` | 1 | ~103 ns |
+| `haversine` | 1 | ~18 ns |
+
 ## Global conventions
 
 - Rust stable, `edition = "2021"`, `#![deny(unsafe_code)]` in `navcore` (all unsafe stays in generated UniFFI code).

@@ -16,7 +16,13 @@ default = []
 serde = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
+rstar = "0.12"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "geo"
+harness = false

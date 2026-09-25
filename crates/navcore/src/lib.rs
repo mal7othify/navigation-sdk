@@ -6,3 +6,11 @@
 //! Units: metres, seconds, degrees for lat/lng, radians internally for bearings.
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+
+pub mod geo;
+pub mod types;
+
+pub use types::{
+    GeoPoint, ManeuverType, NavError, RawLocation, Route, RouteStep, SnappedLocation, TripProgress,
+    TripState,
+};
