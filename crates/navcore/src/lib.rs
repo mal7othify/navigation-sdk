@@ -12,8 +12,10 @@ pub mod filter;
 pub mod fixtures;
 pub mod geo;
 pub mod matcher;
+pub mod navigator;
 pub mod types;
 
+pub use navigator::{Navigator, NavigatorConfig};
 pub use types::{
     GeoPoint, ManeuverType, NavError, RawLocation, Route, RouteStep, SnappedLocation, TripProgress,
     TripState,

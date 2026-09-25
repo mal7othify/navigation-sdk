@@ -4,6 +4,7 @@
 //! unless the field name says otherwise, and lat/lng are degrees.
 
 use core::fmt;
+use std::sync::Arc;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,10 @@ pub enum ManeuverType {
 
 /// One instruction-bearing leg of a [`Route`], covering geometry vertices
 /// `start_index..=end_index`.
+///
+/// Follows the OSRM convention: the manoeuvre is performed at the *start* of
+/// the step, the first step is `Depart`, and the last step is a zero-length
+/// `Arrive` step at the final vertex.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RouteStep {
@@ -89,7 +94,8 @@ pub struct RouteStep {
     pub distance_m: f64,
 }
 
-/// A route: a polyline plus the steps that partition it.
+/// A route: a polyline plus the steps that partition it. The last step must
+/// be a zero-length step at the final vertex (see [`RouteStep`]).
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Route {
@@ -149,6 +155,14 @@ impl Route {
                 "steps end at vertex {expected_start} but geometry ends at {last_vertex}"
             )));
         }
+        // `steps` is non-empty here.
+        if let Some(last) = self.steps.last() {
+            if last.start_index != last.end_index {
+                return Err(NavError::InvalidRoute(
+                    "last step must be a zero-length arrival step at the final vertex".into(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -202,8 +216,9 @@ pub struct TripState {
     pub distance_to_next_maneuver_m: f64,
     /// Distance along the route from the snapped position to the destination, metres.
     pub distance_remaining_m: f64,
-    /// Instruction for the upcoming manoeuvre (the next step's instruction).
-    pub next_instruction: String,
+    /// Instruction for the upcoming manoeuvre (the next step's instruction;
+    /// on the final step, its own). Shared, so cloning does not allocate.
+    pub next_instruction: Arc<str>,
     /// True after enough consecutive fixes beyond the off-route distance.
     pub is_off_route: bool,
     /// True when the core wants the host to fetch a new route and call `set_route`.
@@ -233,6 +248,8 @@ pub enum NavError {
     },
     /// The fix has a non-finite or out-of-range coordinate.
     InvalidLocation,
+    /// A `NavigatorConfig` value is out of range.
+    InvalidConfig(String),
     /// JSON could not be parsed into a route.
     InvalidJson(String),
 }
@@ -256,6 +273,7 @@ impl fmt::Display for NavError {
                 "implausible location: implied speed {implied_speed_mps:.1} m/s exceeds {max_speed_mps:.1} m/s"
             ),
             NavError::InvalidLocation => write!(f, "invalid location coordinate"),
+            NavError::InvalidConfig(reason) => write!(f, "invalid config: {reason}"),
             NavError::InvalidJson(reason) => write!(f, "invalid json: {reason}"),
         }
     }
@@ -287,9 +305,18 @@ mod tests {
     fn valid_route_passes() {
         let route = Route {
             geometry: geometry(5),
-            steps: vec![step(0, 2), step(2, 4)],
+            steps: vec![step(0, 2), step(2, 4), step(4, 4)],
         };
         assert_eq!(route.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_missing_arrival_step() {
+        let route = Route {
+            geometry: geometry(5),
+            steps: vec![step(0, 2), step(2, 4)],
+        };
+        assert!(matches!(route.validate(), Err(NavError::InvalidRoute(_))));
     }
 
     #[test]
@@ -305,7 +332,7 @@ mod tests {
     fn rejects_gap_between_steps() {
         let route = Route {
             geometry: geometry(5),
-            steps: vec![step(0, 2), step(3, 4)],
+            steps: vec![step(0, 2), step(3, 4), step(4, 4)],
         };
         assert!(route.validate().is_err());
     }
@@ -314,7 +341,7 @@ mod tests {
     fn rejects_steps_not_reaching_end() {
         let route = Route {
             geometry: geometry(5),
-            steps: vec![step(0, 3)],
+            steps: vec![step(0, 3), step(3, 3)],
         };
         assert!(route.validate().is_err());
     }
@@ -325,7 +352,7 @@ mod tests {
         g[1].lat = 95.0;
         let route = Route {
             geometry: g,
-            steps: vec![step(0, 2)],
+            steps: vec![step(0, 2), step(2, 2)],
         };
         assert!(route.validate().is_err());
     }
@@ -335,7 +362,7 @@ mod tests {
     fn json_roundtrip() {
         let route = Route {
             geometry: geometry(3),
-            steps: vec![step(0, 2)],
+            steps: vec![step(0, 2), step(2, 2)],
         };
         let json = serde_json::to_string(&route).unwrap();
         let back = Route::from_json(&json).unwrap();

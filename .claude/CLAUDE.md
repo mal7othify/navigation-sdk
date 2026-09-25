@@ -75,8 +75,14 @@ regenerate, then update the Kotlin/Swift wrappers.
 
 Decisions made while resolving gaps in the plan (keep consistent):
 
-- `TripState` has a `needs_reroute: bool` field (set by the core, cleared on `set_route`).
-- `TripProgress` is an enum: `NotStarted`, `Navigating`, `Arrived`.
+- `TripState` has a `needs_reroute: bool` field. It is an edge flag: true only on the update that issues a
+  (rate-limited) reroute request.
+- `TripState.next_instruction` is `Arc<str>` in the core (no allocation per update); the FFI layer copies to `String`.
+- `TripProgress` is an enum: `NotStarted`, `Navigating`, `Arrived`. `NotStarted` never appears in a returned state; it
+  exists for host-side defaults.
+- Routes follow the OSRM step convention: the manoeuvre is at the *start* of a step, and the last step is a
+  zero-length `Arrive` step at the final vertex. `Route::validate` enforces this.
+- Fixtures are regenerated with `cargo run -p navcore --features serde --example gen_fixtures`; never hand-edit them.
 - All tunables live in one `NavigatorConfig` struct with `Default` impl matching the values in this document.
 - Geometry is hand-written (haversine, bearing, segment projection); no `geo` crate.
 - Hot-loop scratch buffers (HMM window, candidate lists) are fixed-capacity and owned by `Navigator`.
@@ -91,6 +97,8 @@ Benchmark baselines (Apple Silicon, release, `cargo bench -p navcore`):
 | `haversine` | 1 | ~18 ns |
 | `hmm_match_fix_2000` | 3 | ~360 ns |
 | `simple_match_fix_2000` | 3 | ~152 ns |
+| `navigator_drive_600_fixes` (10 min @ 1 Hz) | 4 | ~0.40 ms |
+| `navigator_update_location` | 4 | ~0.80 µs |
 
 Fixture results (raw fixes, σ = reported accuracy): `route_parallel_roads` HMM 0 wrong-carriageway fixes vs simple 9;
 `route_uturn` HMM 0 wrong-lane fixes vs simple 18. Kalman on `route_simple`: raw RMS 12.7 m → filtered 4.9 m (−61 %).

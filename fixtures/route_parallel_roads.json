@@ -185,6 +185,13 @@
         "start_index": 20,
         "end_index": 41,
         "distance_m": 1029.9973052036116
+      },
+      {
+        "instruction": "Arrive at destination",
+        "maneuver": "Arrive",
+        "start_index": 41,
+        "end_index": 41,
+        "distance_m": 0.0
       }
     ]
   },
@@ -1595,69 +1602,89 @@
         "lng": 2.35260771312354
       },
       "accuracy_m": 11.4,
-      "speed_mps": 15.02,
+      "speed_mps": 13.72,
       "course_deg": 265.7,
       "timestamp_ms": 1700000140000
     },
     {
       "point": {
         "lat": 48.85673144322061,
-        "lng": 2.352584419607157
+        "lng": 2.352602130020423
       },
       "accuracy_m": 9.9,
-      "speed_mps": 15.11,
+      "speed_mps": 11.53,
       "course_deg": 261.4,
       "timestamp_ms": 1700000141000
     },
     {
       "point": {
         "lat": 48.85698643643892,
-        "lng": 2.3526573541321687
+        "lng": 2.3527239948336405
       },
       "accuracy_m": 8.1,
-      "speed_mps": 14.35,
+      "speed_mps": 8.87,
       "course_deg": 274.6,
       "timestamp_ms": 1700000142000
     },
     {
       "point": {
         "lat": 48.85678622973537,
-        "lng": 2.3524068182002225
+        "lng": 2.352548405752347
       },
       "accuracy_m": 8.1,
-      "speed_mps": 15.65,
+      "speed_mps": 8.58,
       "course_deg": 277.6,
       "timestamp_ms": 1700000143000
     },
     {
       "point": {
         "lat": 48.85680451871034,
-        "lng": 2.352237521171817
+        "lng": 2.3523694735637
       },
       "accuracy_m": 8.4,
-      "speed_mps": 0.66,
-      "course_deg": null,
+      "speed_mps": 7.27,
+      "course_deg": 264.1,
       "timestamp_ms": 1700000144000
     },
     {
       "point": {
-        "lat": 48.856885008729414,
-        "lng": 2.3523680472934516
+        "lat": 48.85684922315061,
+        "lng": 2.352259819024852
       },
-      "accuracy_m": 10.4,
-      "speed_mps": 0.0,
-      "course_deg": null,
+      "accuracy_m": 8.2,
+      "speed_mps": 6.37,
+      "course_deg": 279.6,
       "timestamp_ms": 1700000145000
     },
     {
       "point": {
-        "lat": 48.85670593735123,
-        "lng": 2.352284047444422
+        "lat": 48.856949230132955,
+        "lng": 2.3520767950660137
       },
-      "accuracy_m": 8.8,
-      "speed_mps": 0.0,
+      "accuracy_m": 9.7,
+      "speed_mps": 0.27,
       "course_deg": null,
       "timestamp_ms": 1700000146000
+    },
+    {
+      "point": {
+        "lat": 48.85682569498698,
+        "lng": 2.351932734762757
+      },
+      "accuracy_m": 11.1,
+      "speed_mps": 0.0,
+      "course_deg": null,
+      "timestamp_ms": 1700000147000
+    },
+    {
+      "point": {
+        "lat": 48.856798278221675,
+        "lng": 2.3521684819810122
+      },
+      "accuracy_m": 9.9,
+      "speed_mps": 0.82,
+      "course_deg": null,
+      "timestamp_ms": 1700000148000
     }
   ],
   "truth": [
@@ -2227,15 +2254,23 @@
     },
     {
       "lat": 48.856869796109116,
-      "lng": 2.352708826509082
+      "lng": 2.3527265369223485
     },
     {
       "lat": 48.856869796109116,
-      "lng": 2.3525037968461877
+      "lng": 2.352570437547659
     },
     {
       "lat": 48.856869796109116,
-      "lng": 2.352298767183293
+      "lng": 2.352440354735418
+    },
+    {
+      "lat": 48.856869796109116,
+      "lng": 2.352331952391883
+    },
+    {
+      "lat": 48.856869796109116,
+      "lng": 2.3522416171056046
     },
     {
       "lat": 48.856869796109116,
@@ -2253,7 +2288,8 @@
   "expected": {
     "step_sequence": [
       0,
-      1
+      1,
+      2
     ],
     "off_route_ranges": [],
     "arrives": true
