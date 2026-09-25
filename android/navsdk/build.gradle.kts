@@ -52,6 +52,8 @@ kotlin {
 dependencies {
     // UniFFI's Kotlin bindings load the native library through JNA.
     api("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
+    // The generated bindings use @RequiresApi for the Android cleaner path.
+    implementation(libs.androidx.annotation)
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
 
@@ -59,6 +61,8 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.jna.jar)
     testImplementation(libs.coroutines.test)
+    // The Android SDK's org.json is a stub on the JVM; use the real one in unit tests.
+    testImplementation(libs.org.json)
 }
 
 // Point JNA at the host-built Rust library so unit tests exercise the real core.

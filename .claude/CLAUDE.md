@@ -93,6 +93,14 @@ Decisions made while resolving gaps in the plan (keep consistent):
   UniFFI records cannot carry methods. Release profile does **not** set `panic = "abort"` so UniFFI's panic guard can
   surface an unexpected panic as a host exception rather than kill the app.
 - The stable toolchain must be ≥ 1.91 (UniFFI 0.32's dependencies); `rustup update stable` if the build complains.
+- Android: AGP 8.13.2 on Gradle 8.14 (wrapper committed), Kotlin 2.4.20, compileSdk 36, minSdk 24. The Compose BOM is
+  pinned to 2025.12.01 because 2026.x BOMs require compileSdk 37 / AGP 9.1. Gradle needs JDK 17+; this machine
+  selects one via `~/.gradle/gradle.properties` (`org.gradle.java.home`).
+- Android wrapper lives in package `com.navsdk` (`NavigationSession`); generated bindings are in `com.navsdk.core`
+  and gitignored. `navsdk` needs `androidx.annotation` because the generated code uses `@RequiresApi`.
+- `:navsdk:testDebugUnitTest` runs the real Rust core on the JVM via JNA against `target/release/libnavcore_ffi.dylib`
+  (skips itself if the dylib is missing). `:demo:connectedDebugAndroidTest` replays fixtures on an emulator; the demo
+  loads all `fixtures/*.json` as assets straight from the repo directory.
 - All tunables live in one `NavigatorConfig` struct with `Default` impl matching the values in this document.
 - Geometry is hand-written (haversine, bearing, segment projection); no `geo` crate.
 - Hot-loop scratch buffers (HMM window, candidate lists) are fixed-capacity and owned by `Navigator`.

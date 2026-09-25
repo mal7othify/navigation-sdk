@@ -3,6 +3,8 @@ agp = "8.13.2"
 kotlin = "2.4.20"
 coroutines = "1.11.0"
 jna = "5.19.1"
+androidxAnnotation = "1.9.1"
+orgJson = "20240303"
 composeBom = "2025.12.01"
 activityCompose = "1.10.1"
 lifecycle = "2.9.1"
@@ -15,6 +17,8 @@ androidxTestRunner = "1.6.2"
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidxAnnotation" }
+org-json = { module = "org.json:json", version.ref = "orgJson" }
 jna-jar = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-ui = { module = "androidx.compose.ui:ui" }
