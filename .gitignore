@@ -16,7 +16,6 @@ ios/NavSDK/Sources/NavSDK/Generated/
 ios/NavSDK/Generated/
 ios/NavSDK/Tests/NavSDKTests/Fixtures/
 ios/Demo/Demo/Fixtures/
-ios/Demo/Demo.xcodeproj/
 ios/NavSDK/NavCoreFFI.xcframework/
 
 # Android

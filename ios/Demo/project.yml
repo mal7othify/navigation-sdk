@@ -1,0 +1,59 @@
+# XcodeGen spec for the demo app. Regenerate the project with:
+#   cd ios/Demo && xcodegen generate
+name: Demo
+options:
+  bundleIdPrefix: com.navsdk
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+packages:
+  NavSDK:
+    path: ../NavSDK
+targets:
+  Demo:
+    type: application
+    platform: iOS
+    sources:
+      - path: Demo
+    dependencies:
+      - package: NavSDK
+    info:
+      path: Demo/Info.plist
+      properties:
+        CFBundleDisplayName: NavSDK Demo
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: Used to navigate the loaded route with the device's real position.
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: "NO"
+        PRODUCT_BUNDLE_IDENTIFIER: com.navsdk.demo
+        TARGETED_DEVICE_FAMILY: "1"
+  DemoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: DemoTests
+    dependencies:
+      - target: Demo
+      - package: NavSDK
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        CODE_SIGNING_ALLOWED: "NO"
+schemes:
+  Demo:
+    build:
+      targets:
+        Demo: all
+        DemoTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - DemoTests
+        - package: NavSDK/NavSDKTests

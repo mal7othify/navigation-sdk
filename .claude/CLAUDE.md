@@ -101,6 +101,16 @@ Decisions made while resolving gaps in the plan (keep consistent):
 - `:navsdk:testDebugUnitTest` runs the real Rust core on the JVM via JNA against `target/release/libnavcore_ffi.dylib`
   (skips itself if the dylib is missing). `:demo:connectedDebugAndroidTest` replays fixtures on an emulator; the demo
   loads all `fixtures/*.json` as assets straight from the repo directory.
+- iOS: `scripts/build-ios.sh` builds device + simulator static libs (set `SKIP_DEVICE=1` for simulator only), lipo's
+  the simulator slices, regenerates bindings, writes `ios/NavSDK/NavCoreFFI.xcframework` (gitignored) and copies
+  `fixtures/*.json` into the test and demo bundles (gitignored). Run it before any `xcodebuild`.
+- The demo Xcode project is generated from `ios/Demo/project.yml` with XcodeGen and the `.xcodeproj` is committed, so
+  a clone builds without XcodeGen; rerun `xcodegen generate` after editing `project.yml`. Homebrew is broken on this
+  machine (x86_64 install); the XcodeGen release zip from GitHub works as a drop-in.
+- `-destination 'platform=iOS Simulator,name=iPhone 15'` is ambiguous here (many runtimes). Pick a UDID from
+  `xcrun simctl list devices available -j` and pass `id=<udid>`; CI does the same.
+- Swift wrapper is `@MainActor NavigationSession: ObservableObject`; Rust calls run on a private serial queue. The
+  generated `NavError` already conforms to `Swift.Error`/`LocalizedError`, so no extra mapping is needed.
 - All tunables live in one `NavigatorConfig` struct with `Default` impl matching the values in this document.
 - Geometry is hand-written (haversine, bearing, segment projection); no `geo` crate.
 - Hot-loop scratch buffers (HMM window, candidate lists) are fixed-capacity and owned by `Navigator`.
