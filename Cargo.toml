@@ -21,7 +21,10 @@ codegen-units = 1
 opt-level = 3
 # Keep unwinding so UniFFI's scaffolding can turn an unexpected panic into a
 # host-side exception instead of aborting the app.
-strip = true
+# Strip debug info only: `strip = true` also drops the symbol table, which on
+# Linux removes the UNIFFI_META_* symbols that `--library` mode bindgen reads
+# ("No UniFFI metadata found"). macOS dylibs keep exported symbols either way.
+strip = "debuginfo"
 
 [profile.bench]
 inherits = "release"
