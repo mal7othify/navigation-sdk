@@ -51,9 +51,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: navsdk-android
-          path: |
-            android/navsdk/build/outputs/aar/*.aar
-            android/demo/build/outputs/apk/debug/*.apk
+          path: android/navsdk/build/outputs/aar/*.aar
 
   ios:
     name: iOS XCFramework + simulator tests

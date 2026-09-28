@@ -73,6 +73,21 @@ A toggle switches to the device's real location provider (FusedLocationProvider 
 Generated bindings (`navcore.kt`, `NavCore.swift`, `NavCoreFFI.h`, modulemap) are gitignored and
 reproduced by `scripts/gen-bindings.sh`. **Never edit them.**
 
+### Sharing the demo APK
+
+CI does not publish the APK on every push. To get a downloadable build, run the manual
+`Demo APK` workflow (Actions tab → *Demo APK* → *Run workflow*, or from a terminal):
+
+```sh
+gh workflow run demo-apk.yml            # optionally: -f retention_days=7
+gh run list --workflow=demo-apk.yml     # find the run
+gh run download <run-id>                # fetches navsdk-demo-debug-<sha>.apk
+```
+
+The APK is a debug build signed with the CI debug keystore and bundles all three ABIs. Testers
+install it via `adb install -r` or by opening the file on the phone and allowing installs from
+that source.
+
 ## Adding an API method
 
 1. Implement it in `crates/navcore` with tests.

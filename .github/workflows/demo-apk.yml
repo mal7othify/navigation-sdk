@@ -1,0 +1,66 @@
+name: Demo APK
+
+# Manual only. Trigger from the Actions tab ("Run workflow") or with:
+#   gh workflow run demo-apk.yml
+# The APK is attached to the run as a downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: "How many days to keep the APK download"
+        type: number
+        default: 30
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  apk:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358
+      - uses: gradle/actions/setup-gradle@v4
+      - name: cross-compile + bindings
+        run: scripts/build-android.sh
+      - name: assemble debug APK
+        working-directory: android
+        run: ./gradlew :demo:assembleDebug --console=plain
+      - name: rename with commit
+        id: apk
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          OUT=navsdk-demo-debug-$SHA.apk
+          cp android/demo/build/outputs/apk/debug/demo-debug.apk "$OUT"
+          echo "name=$OUT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}
+          retention-days: ${{ inputs.retention_days }}
+          if-no-files-found: error
+      - name: summary
+        run: |
+          {
+            echo "## Demo APK"
+            echo
+            echo "- Commit: \`$(git rev-parse --short HEAD)\` on \`${GITHUB_REF_NAME}\`"
+            echo "- File: \`${{ steps.apk.outputs.name }}\` ($(du -h '${{ steps.apk.outputs.name }}' | cut -f1))"
+            echo "- Signed with the CI debug keystore; uninstall any copy built on another machine first."
+            echo "- Download from the **Artifacts** box on this run, unzip, then \`adb install -r\` or open on the phone."
+          } >> "$GITHUB_STEP_SUMMARY"
