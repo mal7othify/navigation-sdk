@@ -94,6 +94,11 @@ pub struct TripState {
     pub is_off_route: bool,
     /// True only on the update that issues a (rate-limited) reroute request.
     pub needs_reroute: bool,
+    /// Filtered ground speed, metres/second.
+    pub speed_mps: f64,
+    /// Seconds to the destination over a smoothed average speed. `None` until
+    /// the trip has moved for a few seconds; `0` once arrived.
+    pub eta_s: Option<f64>,
     pub progress: TripProgress,
 }
 
@@ -177,6 +182,26 @@ pub fn route_from_json(json: &str) -> Result<Route, NavError> {
 #[uniffi::export]
 pub fn default_navigator_config() -> NavigatorConfig {
     NavigatorConfig::default()
+}
+
+/// A zigzag walking course anchored at `origin`: three legs of `leg_m` metres
+/// starting on `heading_deg`, a right turn then a left turn, arrival `√5·leg_m`
+/// from the start. Lets a tester exercise the navigator on foot with no map
+/// service.
+#[uniffi::export]
+pub fn walk_course(origin: GeoPoint, heading_deg: f64, leg_m: f64) -> Result<Route, NavError> {
+    navcore::courses::walk_course(origin.into(), heading_deg, leg_m)
+        .map(Route::from)
+        .map_err(NavError::from)
+}
+
+/// A straight route from `from` to `to`, for hosts that want a stand-in
+/// reroute when the navigator sets `needs_reroute`.
+#[uniffi::export]
+pub fn direct_route(from: GeoPoint, to: GeoPoint) -> Result<Route, NavError> {
+    navcore::courses::direct_route(from.into(), to.into())
+        .map(Route::from)
+        .map_err(NavError::from)
 }
 
 /// Core crate version, for demos to prove the native library is linked.
@@ -373,6 +398,8 @@ impl From<navcore::TripState> for TripState {
             next_instruction: s.next_instruction.to_string(),
             is_off_route: s.is_off_route,
             needs_reroute: s.needs_reroute,
+            speed_mps: s.speed_mps,
+            eta_s: s.eta_s,
             progress: s.progress.into(),
         }
     }

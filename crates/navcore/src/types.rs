@@ -223,6 +223,12 @@ pub struct TripState {
     pub is_off_route: bool,
     /// True when the core wants the host to fetch a new route and call `set_route`.
     pub needs_reroute: bool,
+    /// Filtered ground speed, metres/second.
+    pub speed_mps: f64,
+    /// Estimated time to the destination, seconds: remaining distance over a
+    /// smoothed moving-average speed. `None` until the trip has been moving
+    /// long enough for the average to mean something; `Some(0.0)` once arrived.
+    pub eta_s: Option<f64>,
     /// Coarse lifecycle.
     pub progress: TripProgress,
 }

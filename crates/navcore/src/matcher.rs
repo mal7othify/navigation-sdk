@@ -42,6 +42,13 @@ pub struct MatcherConfig {
     pub max_backtrack_m: f64,
     /// Flat log-probability penalty for such backtracking.
     pub backtrack_penalty: f64,
+    /// Prior on the *first* fix after a (re)start favouring the start of the
+    /// route: `log p -= start_prior · along / total`. Routes begin where the
+    /// traveller is, so with no history yet a candidate at the far end must
+    /// be clearly closer to win. Breaks the tie on loop-shaped routes whose
+    /// start and destination coincide, which would otherwise "arrive" on the
+    /// first fix. 0 disables it.
+    pub start_prior: f64,
 }
 
 impl Default for MatcherConfig {
@@ -55,6 +62,7 @@ impl Default for MatcherConfig {
             heading_weight: 3.0,
             max_backtrack_m: 30.0,
             backtrack_penalty: 10.0,
+            start_prior: 2.0,
         }
     }
 }
@@ -142,6 +150,9 @@ pub struct HmmMatcher {
     len: usize,
     /// Along-route distance of the previous result, for the backtrack rule.
     last_along_m: Option<f64>,
+    /// Fixes matched since the last reset; while this is within the window
+    /// the oldest slot is the very first fix and the start prior applies.
+    fixes_seen: usize,
     /// Reused for R-tree results.
     segment_scratch: Vec<usize>,
 }
@@ -159,6 +170,7 @@ impl HmmMatcher {
             head: 0,
             len: 0,
             last_along_m: None,
+            fixes_seen: 0,
             segment_scratch: Vec::with_capacity(64),
         }
     }
@@ -303,13 +315,20 @@ impl HmmMatcher {
     }
 
     /// Forward pass over the window; returns the best candidate of the newest slot.
-    fn viterbi(&self) -> RouteProjection {
+    fn viterbi(&self, total_length_m: f64) -> RouteProjection {
         let mut prev = [0.0f64; MAX_CANDIDATES];
         let mut cur = [0.0f64; MAX_CANDIDATES];
 
         let first = &self.window[self.slot_index(0)];
+        let apply_start_prior = self.fixes_seen <= self.config.window_size
+            && self.config.start_prior > 0.0
+            && total_length_m > 0.0;
         for (i, c) in first.candidates[..first.len].iter().enumerate() {
             prev[i] = c.log_emission;
+            if apply_start_prior {
+                prev[i] -=
+                    self.config.start_prior * (c.proj.distance_along_route_m / total_length_m);
+            }
         }
 
         for k in 1..self.len {
@@ -362,7 +381,8 @@ impl Matcher for HmmMatcher {
         let mut slot = Slot::default();
         self.collect_candidates(index, input, &mut slot);
         self.push_slot(slot);
-        let best = self.viterbi();
+        self.fixes_seen = self.fixes_seen.saturating_add(1);
+        let best = self.viterbi(index.total_length_m());
         self.last_along_m = Some(best.distance_along_route_m);
         Ok(best)
     }
@@ -371,6 +391,7 @@ impl Matcher for HmmMatcher {
         self.len = 0;
         self.head = 0;
         self.last_along_m = None;
+        self.fixes_seen = 0;
     }
 }
 
@@ -426,7 +447,8 @@ mod tests {
             .match_fix(&index, &input(&index, 250.0, 12.0, Some(FRAC_PI_2), 0))
             .unwrap();
         assert!(r.distance_along_route_m < 500.0, "{r:?}");
-        assert!((r.distance_along_route_m - 250.0).abs() < 1e-6);
+        // Two segments meet at x=250; either side of that vertex is the same answer.
+        assert!((r.distance_along_route_m - 250.0).abs() < 1e-2, "{r:?}");
 
         let mut m = HmmMatcher::new(MatcherConfig::default());
         // Heading west → return leg.

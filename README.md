@@ -7,7 +7,7 @@ off-route detection and rate-limited reroute requests — and the mobile layers 
 wrappers.
 
 Out of scope for the POC: map rendering, routing, TTS, background services. Rerouting is a
-callback to the host (`TripState.needs_reroute` → host fetches a route → `set_route`).
+callback to the host (`TripState.needs_reroute` → host fetches a route → `set_route`). Each `TripState` also carries the filtered speed and a smoothed ETA, so a host can show them without doing its own estimation.
 
 ## Architecture
 
@@ -69,6 +69,13 @@ xcodebuild -project ios/Demo/Demo.xcodeproj -scheme Demo -destination "platform=
 Both demos load `fixtures/*.json`, replay the recorded GPS trace at 1× or 10×, and show the next
 instruction, distance to manoeuvre, remaining distance, and OFF ROUTE / ARRIVED / reroute badges.
 A toggle switches to the device's real location provider (FusedLocationProvider / CLLocationManager).
+
+To test on foot without a map service, switch the demo to **Device**, wait for a GPS fix and tap
+**Start walking course here**. The core lays out a zigzag course (three legs of 30/50/100 m: straight,
+right turn, left turn) anchored at your position via `walk_course`, and the screen shows a
+schematic map with the route, the current step, your raw fix and the snapped position, plus speed and
+ETA. Leave the course on purpose: after three fixes beyond 30 m you get OFF ROUTE, the core sets
+`needs_reroute`, and the demo installs a straight `direct_route` back to the destination.
 
 Generated bindings (`navcore.kt`, `NavCore.swift`, `NavCoreFFI.h`, modulemap) are gitignored and
 reproduced by `scripts/gen-bindings.sh`. **Never edit them.**

@@ -206,7 +206,19 @@ pub struct Navigator {
     arrived: bool,
     last_accepted_ms: Option<u64>,
     last_reroute_request_ms: Option<u64>,
+    /// Exponential moving average of filtered speed while moving, for the ETA.
+    avg_speed_mps: f64,
+    /// Seconds of movement folded into `avg_speed_mps` (saturates at `ETA_WARMUP_S`).
+    avg_speed_warmup_s: f64,
 }
+
+/// Time constant of the moving-average speed behind `TripState::eta_s`.
+const ETA_SPEED_TAU_S: f64 = 30.0;
+/// Movement needed before an ETA is reported at all.
+const ETA_WARMUP_S: f64 = 10.0;
+/// Below this filtered speed the trip counts as stopped: the average is held
+/// and the ETA keeps its last value instead of shooting to infinity.
+const ETA_MIN_MOVING_MPS: f64 = 0.5;
 
 impl Navigator {
     /// Build a navigator for `route`. Fails on an invalid route or config.
@@ -226,6 +238,8 @@ impl Navigator {
             arrived: false,
             last_accepted_ms: None,
             last_reroute_request_ms: None,
+            avg_speed_mps: 0.0,
+            avg_speed_warmup_s: 0.0,
         })
     }
 
@@ -283,7 +297,12 @@ impl Navigator {
 
         let enu = self.data.index.frame().to_enu(raw.point);
         let filtered = self.filter.update(enu, &raw)?;
+        let dt_s = self
+            .last_accepted_ms
+            .map(|last| raw.timestamp_ms.saturating_sub(last) as f64 / 1000.0)
+            .unwrap_or(0.0);
         self.last_accepted_ms = Some(raw.timestamp_ms);
+        self.update_avg_speed(filtered.speed_mps, dt_s);
 
         let input = MatchInput {
             position: filtered.position,
@@ -295,13 +314,33 @@ impl Navigator {
 
         self.update_off_route(&proj);
         let needs_reroute = self.maybe_request_reroute(raw.timestamp_ms);
-        if !self.is_off_route {
+        // Steps and arrival only move on fixes that are actually near the
+        // route. Without the distance check a fix far from the whole route
+        // (the matcher falls back to the nearest segment, often the final
+        // vertex) would advance through every step and "arrive" on the first
+        // update, before the off-route hysteresis has had its three fixes.
+        if !self.is_off_route && proj.distance_from_route_m <= self.config.off_route_distance_m {
             self.update_step(&proj, &filtered);
         }
 
-        let state = self.build_state(&proj, needs_reroute);
+        let state = self.build_state(&proj, &filtered, needs_reroute);
         self.state = Some(state.clone());
         Ok(state)
+    }
+
+    /// Fold one filtered speed sample into the moving average. Stopped
+    /// samples hold the average so a red light does not inflate the ETA.
+    fn update_avg_speed(&mut self, speed_mps: f64, dt_s: f64) {
+        if speed_mps < ETA_MIN_MOVING_MPS || dt_s <= 0.0 {
+            return;
+        }
+        if self.avg_speed_warmup_s == 0.0 {
+            self.avg_speed_mps = speed_mps;
+        } else {
+            let alpha = 1.0 - (-dt_s / ETA_SPEED_TAU_S).exp();
+            self.avg_speed_mps += alpha * (speed_mps - self.avg_speed_mps);
+        }
+        self.avg_speed_warmup_s = (self.avg_speed_warmup_s + dt_s).min(ETA_WARMUP_S);
     }
 
     fn update_off_route(&mut self, proj: &RouteProjection) {
@@ -377,20 +416,35 @@ impl Navigator {
         }
     }
 
-    fn build_state(&self, proj: &RouteProjection, needs_reroute: bool) -> TripState {
+    fn build_state(
+        &self,
+        proj: &RouteProjection,
+        filtered: &FilteredLocation,
+        needs_reroute: bool,
+    ) -> TripState {
         let along = proj.distance_along_route_m;
         let total = self.data.index.total_length_m();
         let last = self.data.last_step();
         let step = self.current_step;
         let next = (step + 1).min(last);
+        let remaining = (total - along).max(0.0);
+        let eta_s = if self.arrived {
+            Some(0.0)
+        } else if self.avg_speed_warmup_s >= ETA_WARMUP_S {
+            Some(remaining / self.avg_speed_mps)
+        } else {
+            None
+        };
         TripState {
             snapped: self.data.index.to_snapped(proj),
             current_step_index: step,
             distance_to_next_maneuver_m: (self.data.step_end_m[step] - along).max(0.0),
-            distance_remaining_m: (total - along).max(0.0),
+            distance_remaining_m: remaining,
             next_instruction: Arc::clone(&self.data.instructions[next]),
             is_off_route: self.is_off_route,
             needs_reroute,
+            speed_mps: filtered.speed_mps,
+            eta_s,
             progress: if self.arrived {
                 TripProgress::Arrived
             } else {
@@ -520,6 +574,136 @@ mod tests {
         assert!((s.distance_to_next_maneuver_m - 200.0).abs() < 1.0);
         assert!((s.distance_remaining_m - 500.0).abs() < 1.0);
         assert_eq!(s.progress, TripProgress::Navigating);
+    }
+
+    #[test]
+    fn fixes_far_from_the_route_never_advance_or_arrive() {
+        // Regression: standing kilometres from the route, the nearest segment
+        // is the final one, so along-route distance alone said "arrived" on
+        // the very first fix.
+        let (route, frame) = l_route();
+        let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
+        let mut off_route_seen = false;
+        for k in 0..10 {
+            let s = nav
+                .update_location(fix(&frame, 5000.0 + k as f64 * 1.5, 5000.0, k, Some(90.0)))
+                .unwrap();
+            assert_eq!(s.current_step_index, 0, "fix {k} advanced");
+            assert_eq!(s.progress, TripProgress::Navigating, "fix {k} arrived");
+            assert_eq!(&*s.next_instruction, "Turn left");
+            assert!(s.snapped.distance_from_route_m > 1000.0);
+            off_route_seen |= s.is_off_route;
+        }
+        assert!(off_route_seen, "should be flagged off-route instead");
+    }
+
+    /// A loop whose destination is its start (a walking course, a delivery
+    /// round) must not "arrive" on the first fix just because GPS noise put
+    /// that fix a metre or two on the final leg's side of the origin.
+    #[test]
+    fn closed_loop_does_not_arrive_on_the_first_fix() {
+        let frame = LocalFrame::new(GeoPoint::new(45.0, 7.0));
+        // 30 m square, counter-clockwise: north, west, south, east back home.
+        let corners = [
+            (0.0, 0.0),
+            (0.0, 30.0),
+            (-30.0, 30.0),
+            (-30.0, 0.0),
+            (0.0, 0.0),
+        ];
+        let mut pts = Vec::new();
+        for w in corners.windows(2) {
+            let (ax, ay) = w[0];
+            let (bx, by) = w[1];
+            for i in 0..3 {
+                let t = i as f64 / 3.0;
+                pts.push(Enu::new(ax + (bx - ax) * t, ay + (by - ay) * t));
+            }
+        }
+        pts.push(Enu::new(0.0, 0.0));
+        let geometry: Vec<GeoPoint> = pts.iter().map(|e| frame.to_geo(*e)).collect();
+        let step = |i: &str, m, s, e, d| RouteStep {
+            instruction: i.to_string(),
+            maneuver: m,
+            start_index: s,
+            end_index: e,
+            distance_m: d,
+        };
+        let route = Route {
+            geometry,
+            steps: vec![
+                step("North", ManeuverType::Depart, 0, 3, 30.0),
+                step("West", ManeuverType::TurnLeft, 3, 6, 30.0),
+                step("South", ManeuverType::TurnLeft, 6, 9, 30.0),
+                step("East", ManeuverType::TurnLeft, 9, 12, 30.0),
+                step("Arrive", ManeuverType::Arrive, 12, 12, 0.0),
+            ],
+        };
+        let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
+        // Standing still at the start, 2 m east: nearer the final (eastbound)
+        // leg's end than the first leg, and no heading yet.
+        for k in 0..5 {
+            let s = nav
+                .update_location(RawLocation {
+                    point: frame.to_geo(Enu::new(2.0, -1.0)),
+                    accuracy_m: Some(8.0),
+                    speed_mps: None,
+                    course_deg: None,
+                    timestamp_ms: 1_000_000 + k * 1000,
+                })
+                .unwrap();
+            assert_eq!(s.current_step_index, 0, "fix {k}");
+            assert_eq!(s.progress, TripProgress::Navigating, "fix {k}");
+            assert!(
+                s.distance_remaining_m > 100.0,
+                "fix {k}: {}",
+                s.distance_remaining_m
+            );
+        }
+    }
+
+    #[test]
+    fn speed_and_eta_follow_the_filtered_velocity() {
+        let (route, frame) = l_route();
+        let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
+        // First fix: nothing to average yet.
+        let s = nav
+            .update_location(fix(&frame, 0.0, 0.0, 0, Some(90.0)))
+            .unwrap();
+        assert_eq!(s.eta_s, None);
+        // Cruise east at 10 m/s for 20 s; ETA should settle near remaining / 10.
+        let mut last = s;
+        for k in 1..=20 {
+            last = nav
+                .update_location(fix(&frame, k as f64 * 10.0, 0.0, k, Some(90.0)))
+                .unwrap();
+        }
+        assert!(
+            (last.speed_mps - 10.0).abs() < 1.5,
+            "speed {}",
+            last.speed_mps
+        );
+        let eta = last.eta_s.expect("eta after warm-up");
+        let expected = last.distance_remaining_m / 10.0;
+        assert!(
+            (eta - expected).abs() < expected * 0.2,
+            "eta {eta} vs {expected}"
+        );
+        // Finish the east leg, turn north, arrive: the ETA pins to zero.
+        let mut t = 21;
+        for k in 21..=30 {
+            nav.update_location(fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0)))
+                .unwrap();
+            t += 1;
+        }
+        for k in 1..=30 {
+            last = nav
+                .update_location(fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0)))
+                .unwrap();
+            t += 1;
+        }
+        assert_eq!(last.progress, TripProgress::Arrived);
+        assert_eq!(last.eta_s, Some(0.0));
     }
 
     #[test]
