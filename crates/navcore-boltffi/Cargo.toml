@@ -1,0 +1,17 @@
+[package]
+name = "navcore-boltffi"
+description = "BoltFFI bindings layer over navcore (Approach B, push). Thin wrappers only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "navcore_boltffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+navcore = { path = "../navcore", features = ["serde"] }
+boltffi = { version = "0.31", default-features = false }
+async-trait = "0.1"
