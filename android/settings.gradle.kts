@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "navsdk-android"
-include(":navsdk", ":demo")
+include(":navsdk", ":navsdk-push", ":demo")
