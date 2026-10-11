@@ -7,6 +7,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod courses;
 pub mod filter;
 #[cfg(feature = "serde")]
 pub mod fixtures;

@@ -12,9 +12,15 @@ case "$(uname -s)" in
 esac
 LIB="${1:-target/release/libnavcore_ffi.$EXT}"
 
-if [[ ! -f "$LIB" ]]; then
+# Always rebuild the host library: the bindings are generated from metadata
+# embedded in it, so a stale dylib silently produces stale bindings. Cargo is
+# incremental, so this is free when nothing changed.
+if [[ $# -eq 0 ]]; then
   echo "==> building navcore-ffi (release)"
   cargo build -p navcore-ffi --release
+elif [[ ! -f "$LIB" ]]; then
+  echo "error: $LIB not found" >&2
+  exit 1
 fi
 
 KOTLIN_OUT=android/navsdk/src/main/kotlin

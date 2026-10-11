@@ -95,6 +95,28 @@ Decisions made while resolving gaps in the plan (keep consistent):
 - `navcore::sim::RouteSimulator` is the one simulator (seeded xorshift64\*, no `rand`). `gen_fixtures` uses its
   `Rng`, and the fixtures were verified byte-identical after the switch.
 - `TripState.next_instruction` is `Arc<str>` in the core (no allocation per update); the FFI layer copies to `String`.
+- `PositionState` also carries `speed_mps` (filtered ground speed) and `eta_s: Option<f64>` (remaining distance over
+  a 30 s moving-average speed; `None` until ~10 s of movement, `Some(0.0)` once arrived). Stopped samples hold the
+  average so a red light does not inflate the ETA.
+- Steps and arrival only move on fixes within `off_route_distance_m` of the route. Without that gate a fix far from
+  the whole route snaps to the nearest segment (often the final vertex) and "arrives" on the first update, before
+  the off-route hysteresis has had its three fixes. Regression test: `fixes_far_from_the_route_never_advance_or_arrive`.
+- `navcore::courses` builds synthetic routes anchored at a real position so the navigator can be tested on foot
+  with no map or routing service: `walk_course(origin, heading_deg, leg_m)` is a zigzag (Depart, TurnRight,
+  TurnLeft, Arrive √5·leg from the start, vertices every 10 m) and `direct_route(from, to)` is the stand-in reroute, capped at
+  50 km so a placeholder fixture route on another continent cannot produce a 500k-vertex line. Both are exported
+  over both FFI layers. The demos' Device mode has a "Start walking course here" button and draws a schematic map
+  (route, current step, raw fix, snapped point) on a plain canvas; no map tiles anywhere. While a course is active
+  each reroute request is answered with a `direct_route` to the destination: the pull wrapper's replanner closure
+  installs it, the push core's `ReplanningService` returns it. On the placeholder fixture route in Device mode the
+  replanners decline (the phone is nowhere near it); replaying or simulating, they reinstall the same route.
+- The HMM matcher applies a start prior on the first fix after a (re)start (`MatcherConfig::start_prior`, 2.0 nats
+  at the far end of the route, scaled by along/total). Routes begin where the traveller is; on a loop whose start
+  and destination coincide, the first fix was otherwise a coin toss and the losing side was an instant, sticky
+  arrival (seen on iOS with the original closed-square course). Regression test:
+  `closed_loop_does_not_arrive_on_the_first_fix`.
+- `scripts/gen-bindings.sh` always rebuilds the host `navcore-ffi` dylib before generating: bindings come from
+  metadata inside that library, so a stale dylib silently produces stale bindings.
 - `TripProgress` is an enum: `NotStarted`, `Navigating`, `Arrived`. `NotStarted` never appears in a returned state; it
   exists for host-side defaults.
 - Routes follow the OSRM step convention: the manoeuvre is at the *start* of a step, and the last step is a
@@ -122,8 +144,10 @@ Decisions made while resolving gaps in the plan (keep consistent):
   the simulator slices, regenerates bindings, writes `ios/NavSDK/NavCoreFFI.xcframework` (gitignored) and copies
   `fixtures/*.json` into the test and demo bundles (gitignored). Run it before any `xcodebuild`.
 - The demo Xcode project is generated from `ios/Demo/project.yml` with XcodeGen and the `.xcodeproj` is committed, so
-  a clone builds without XcodeGen; rerun `xcodegen generate` after editing `project.yml`. Homebrew is broken on this
-  machine (x86_64 install); the XcodeGen release zip from GitHub works as a drop-in.
+  a clone builds without XcodeGen; rerun `xcodegen generate` after editing `project.yml`.
+  Code signing is disabled only for `sdk=iphonesimulator*` (so CI needs no Apple account); device builds sign
+  automatically with `DEVELOPMENT_TEAM` from `project.yml`. Change the team there, not in Xcode's Signing tab.
+  Homebrew is broken on this machine (x86_64 install); the XcodeGen release zip from GitHub works as a drop-in.
 - `-destination 'platform=iOS Simulator,name=iPhone 15'` is ambiguous here (many runtimes). Pick a UDID from
   `xcrun simctl list devices available -j` and pass `id=<udid>`; CI does the same.
 - Swift wrapper is `@MainActor NavigationSession: ObservableObject`; Rust calls run on a private serial queue. The

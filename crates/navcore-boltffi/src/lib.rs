@@ -109,6 +109,11 @@ pub struct PositionState {
     pub snapped: SnappedLocation,
     pub distance_to_next_maneuver_m: f64,
     pub distance_remaining_m: f64,
+    /// Filtered ground speed, metres/second.
+    pub speed_mps: f64,
+    /// Seconds to the destination over a smoothed average speed. `None` until
+    /// the trip has moved for a few seconds; `0` once arrived.
+    pub eta_s: Option<f64>,
     /// Repeated from `TripState` so position-only consumers can show a badge.
     pub is_off_route: bool,
     /// Repeated from `TripState`.
@@ -382,6 +387,25 @@ pub fn default_navigator_config() -> NavigatorConfig {
 #[export]
 pub fn default_simulator_config() -> SimulatorConfig {
     SimulatorConfig::default()
+}
+
+/// A zigzag walking course anchored at `origin`: three legs of `leg_m` metres
+/// starting on `heading_deg`, a right turn then a left turn. Lets a tester
+/// exercise the navigator on foot with no map service.
+#[export]
+pub fn walk_course(origin: GeoPoint, heading_deg: f64, leg_m: f64) -> Result<Route, NavError> {
+    navcore::courses::walk_course(origin.into(), heading_deg, leg_m)
+        .map(Route::from)
+        .map_err(NavError::from)
+}
+
+/// A straight route from `from` to `to`, the stand-in reroute a host's
+/// `ReplanningService` can return when it has no routing backend.
+#[export]
+pub fn direct_route(from: GeoPoint, to: GeoPoint) -> Result<Route, NavError> {
+    navcore::courses::direct_route(from.into(), to.into())
+        .map(Route::from)
+        .map_err(NavError::from)
 }
 
 /// Core crate version, for demos to prove the native library is linked.
@@ -902,6 +926,8 @@ impl From<navcore::PositionState> for PositionState {
             snapped: s.snapped.into(),
             distance_to_next_maneuver_m: s.distance_to_next_maneuver_m,
             distance_remaining_m: s.distance_remaining_m,
+            speed_mps: s.speed_mps,
+            eta_s: s.eta_s,
             is_off_route: s.is_off_route,
             progress: s.progress.into(),
         }

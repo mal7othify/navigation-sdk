@@ -16,6 +16,8 @@ and a bounded, rate-limited reroute policy — and the mobile layers are thin, i
 
 Out of scope for the POC: map rendering, routing, TTS, background services. Route fetching is
 always the host's job; the two approaches differ in who *decides* and who *installs* the route.
+Each `PositionState` also carries the filtered speed and a smoothed ETA, so a host can show them
+without doing its own estimation.
 
 ## Architecture
 
@@ -88,6 +90,15 @@ Rust simulator (with a *Deviate* button that leaves the route for 300 m to trigg
 the device's real location provider. Each card carries a metrics strip: boundary µs per call
 (avg / p99 / max), position and trip updates delivered, instruction-card recompositions, reroutes
 and routes installed.
+
+To test on foot without a map service, switch a demo to **Device**, wait for a GPS fix and tap
+**Start walking course here**. The core lays out a zigzag course (three legs of 30/50/100 m: straight,
+right turn, left turn) anchored at your position via `walk_course`, and each card shows a schematic
+map with the route, the current step, your raw fix and the snapped position, plus speed and ETA.
+Leave the course on purpose: after three fixes beyond 30 m you get OFF ROUTE and a reroute request;
+the pull wrapper answers it by fetching a straight `direct_route` back to the destination and calling
+`setRoute`, the push core answers it by calling the host's `ReplanningService` and installing the
+result itself. The Both tab runs the same walk through both at once.
 
 Generated bindings are gitignored and reproduced by the build scripts: UniFFI's `navcore.kt`,
 `NavCore.swift`, `NavCoreFFI.h` + modulemap by `scripts/gen-bindings.sh`; BoltFFI's
