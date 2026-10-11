@@ -75,6 +75,17 @@
                ReferencedContainer = "container:../NavSDK">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "NavSDKPushTests"
+               BuildableName = "NavSDKPushTests"
+               BlueprintName = "NavSDKPushTests"
+               ReferencedContainer = "container:../NavSDKPush">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>

@@ -7,14 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		3133AF12C60911F9CE08D8C7 /* NavCorePush in Frameworks */ = {isa = PBXBuildFile; productRef = 12C2924419DAE5DD0FC4A2A9 /* NavCorePush */; };
 		35C47B2B2E19EFD8F23EF916 /* NavSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 7C90502ECEDFC97000407B81 /* NavSDK */; };
 		433A4C5E6E3006ADF73CAD58 /* route_uturn.json in Resources */ = {isa = PBXBuildFile; fileRef = 038934DA6FB3DB2FF6EA3C4D /* route_uturn.json */; };
 		77559DF57E5523F3673F7894 /* DemoScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = B04F4E9B629306493279C15D /* DemoScreen.swift */; };
 		82B195ED104530E679F544B9 /* route_detour.json in Resources */ = {isa = PBXBuildFile; fileRef = 257D03A1DB1DEE039DD9FAA5 /* route_detour.json */; };
 		8326712B5BE2F83B67985D77 /* route_parallel_roads.json in Resources */ = {isa = PBXBuildFile; fileRef = 11B8D58E566B1A2D1D096769 /* route_parallel_roads.json */; };
+		8895D13F62329C00D7EC66E3 /* NavCorePush in Frameworks */ = {isa = PBXBuildFile; productRef = E554F6D0A03034C1CEE7EE28 /* NavCorePush */; };
 		88A73B41EC5B5871BE7776A3 /* DemoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 403665714F0F82EC4EB9AC11 /* DemoApp.swift */; };
 		8B286162B4507D71A9CFC340 /* ReplayArrivalDemoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED2E1027A046C8C56A2D836 /* ReplayArrivalDemoTests.swift */; };
 		8BD1FA54D846EBDEF2A49A52 /* NavSDK in Frameworks */ = {isa = PBXBuildFile; productRef = FF477740F19EEA5BF798F2A2 /* NavSDK */; };
+		BAF5769D49BB9ECD473B51E4 /* BoundaryBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A18C873CAA7254A743B08C88 /* BoundaryBenchmarkTests.swift */; };
 		CB21C3D5DE51CEAFA7AC9D8F /* route_simple.json in Resources */ = {isa = PBXBuildFile; fileRef = 7535A2EE336611A482070C4F /* route_simple.json */; };
 		E837B58F8DF8EE5B31BCE991 /* DemoModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33AF5391C0598531F4D8A650 /* DemoModel.swift */; };
 /* End PBXBuildFile section */
@@ -39,6 +42,8 @@
 		403665714F0F82EC4EB9AC11 /* DemoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoApp.swift; sourceTree = "<group>"; };
 		5723838B8FCA19B052C39E69 /* NavSDK */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NavSDK; path = ../NavSDK; sourceTree = SOURCE_ROOT; };
 		7535A2EE336611A482070C4F /* route_simple.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = route_simple.json; sourceTree = "<group>"; };
+		A18C873CAA7254A743B08C88 /* BoundaryBenchmarkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundaryBenchmarkTests.swift; sourceTree = "<group>"; };
+		AD82FA36394B35AB8D2372B7 /* NavSDKPush */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NavSDKPush; path = ../NavSDKPush; sourceTree = SOURCE_ROOT; };
 		B04F4E9B629306493279C15D /* DemoScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoScreen.swift; sourceTree = "<group>"; };
 		E158E1D8DDD5F3DC89B171A3 /* Demo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Demo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FED2E1027A046C8C56A2D836 /* ReplayArrivalDemoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayArrivalDemoTests.swift; sourceTree = "<group>"; };
@@ -50,6 +55,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8BD1FA54D846EBDEF2A49A52 /* NavSDK in Frameworks */,
+				3133AF12C60911F9CE08D8C7 /* NavCorePush in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -58,6 +64,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				35C47B2B2E19EFD8F23EF916 /* NavSDK in Frameworks */,
+				8895D13F62329C00D7EC66E3 /* NavCorePush in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -68,6 +75,7 @@
 			isa = PBXGroup;
 			children = (
 				5723838B8FCA19B052C39E69 /* NavSDK */,
+				AD82FA36394B35AB8D2372B7 /* NavSDKPush */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -75,6 +83,7 @@
 		49E747D093E40319A38D1125 /* DemoTests */ = {
 			isa = PBXGroup;
 			children = (
+				A18C873CAA7254A743B08C88 /* BoundaryBenchmarkTests.swift */,
 				FED2E1027A046C8C56A2D836 /* ReplayArrivalDemoTests.swift */,
 			);
 			path = DemoTests;
@@ -140,6 +149,7 @@
 			name = DemoTests;
 			packageProductDependencies = (
 				FF477740F19EEA5BF798F2A2 /* NavSDK */,
+				12C2924419DAE5DD0FC4A2A9 /* NavCorePush */,
 			);
 			productName = DemoTests;
 			productReference = 05848EA09C6E610DC0CA9681 /* DemoTests.xctest */;
@@ -160,6 +170,7 @@
 			name = Demo;
 			packageProductDependencies = (
 				7C90502ECEDFC97000407B81 /* NavSDK */,
+				E554F6D0A03034C1CEE7EE28 /* NavCorePush */,
 			);
 			productName = Demo;
 			productReference = E158E1D8DDD5F3DC89B171A3 /* Demo.app */;
@@ -190,6 +201,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				ED19D57EC975D94088F72965 /* XCLocalSwiftPackageReference "../NavSDK" */,
+				3350A90DAF71B419E6427012 /* XCLocalSwiftPackageReference "../NavSDKPush" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 89EED0D913153940931D2FE8 /* Products */;
@@ -221,6 +233,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BAF5769D49BB9ECD473B51E4 /* BoundaryBenchmarkTests.swift in Sources */,
 				8B286162B4507D71A9CFC340 /* ReplayArrivalDemoTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -472,6 +485,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		3350A90DAF71B419E6427012 /* XCLocalSwiftPackageReference "../NavSDKPush" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../NavSDKPush;
+		};
 		ED19D57EC975D94088F72965 /* XCLocalSwiftPackageReference "../NavSDK" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../NavSDK;
@@ -479,9 +496,17 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		12C2924419DAE5DD0FC4A2A9 /* NavCorePush */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NavCorePush;
+		};
 		7C90502ECEDFC97000407B81 /* NavSDK */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NavSDK;
+		};
+		E554F6D0A03034C1CEE7EE28 /* NavCorePush */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NavCorePush;
 		};
 		FF477740F19EEA5BF798F2A2 /* NavSDK */ = {
 			isa = XCSwiftPackageProductDependency;
