@@ -265,16 +265,16 @@ mod tests {
                     })
                     .unwrap();
                 t += 1;
-                if seen.last() != Some(&s.current_step_index) {
-                    seen.push(s.current_step_index);
+                if seen.last() != Some(&s.trip.current_step_index) {
+                    seen.push(s.trip.current_step_index);
                 }
-                assert!(!s.is_off_route, "fix {t} off route");
+                assert!(!s.position.is_off_route, "fix {t} off route");
                 last = Some(s);
             }
         }
         assert_eq!(seen, vec![0, 1, 2, 3]);
         let last = last.unwrap();
-        assert_eq!(last.progress, TripProgress::Arrived);
-        assert!((last.speed_mps - 1.4).abs() < 0.5);
+        assert_eq!(last.position.progress, TripProgress::Arrived);
+        assert!((last.position.speed_mps - 1.4).abs() < 0.5);
     }
 }

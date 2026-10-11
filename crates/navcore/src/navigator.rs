@@ -1,16 +1,23 @@
 //! The navigator: owns the route, filter and matcher and turns raw fixes into
-//! [`TripState`]s with hysteresis on step advancement, off-route detection
-//! and rate-limited reroute requests.
+//! a [`PositionState`] (every fix) and a [`TripState`] (on change), with
+//! hysteresis on step advancement, off-route detection and a bounded,
+//! rate-limited reroute policy.
 //!
 //! The per-fix path allocates nothing: the filter and matcher use fixed
-//! storage, and `TripState` shares step instructions through `Arc<str>`.
+//! storage, `PositionState` is `Copy`, and `TripState` shares step
+//! instructions through `Arc<str>`.
 
 use std::sync::Arc;
 
 use crate::filter::{FilterConfig, FilteredLocation, LocationFilter};
-use crate::geo::{bearing_diff_rad, deg_to_rad, RouteIndex, RouteProjection};
+use crate::geo::{
+    bearing_diff_rad, bearing_rad_to_deg, deg_to_rad, Enu, RouteIndex, RouteProjection,
+};
 use crate::matcher::{HmmMatcher, MatchInput, Matcher, MatcherConfig};
-use crate::types::{NavError, RawLocation, Route, TripProgress, TripState};
+use crate::types::{
+    FullState, NavError, PositionState, RawLocation, RerouteReason, RerouteRequest, Route,
+    TripProgress, TripState,
+};
 
 /// Every tunable in one place. Defaults suit a car at urban speeds with
 /// typical phone GNSS (5–15 m accuracy, 1 Hz).
@@ -28,8 +35,24 @@ pub struct NavigatorConfig {
     pub off_route_min_consecutive: u32,
     /// Consecutive on-route fixes before `is_off_route` becomes false again.
     pub on_route_min_consecutive: u32,
-    /// Minimum gap between reroute requests. Seconds.
+    /// Off-route fixes only count while the filtered speed is at least this;
+    /// a parked vehicle drifting under a bridge never goes off-route. Metres/second.
+    pub off_route_min_speed_mps: f64,
+    /// The vehicle must have moved at least this far since the off-route
+    /// streak began before `is_off_route` becomes true. Metres.
+    pub off_route_min_movement_m: f64,
+    /// Deviations are ignored for this long after `new` or `set_route`, while
+    /// the filter settles and the driver leaves the car park. Seconds.
+    pub reroute_grace_period_s: f64,
+    /// Deviations are ignored when the vehicle is this close (straight line)
+    /// to the destination. Metres.
+    pub suppress_off_route_near_destination_m: f64,
+    /// Minimum gap between reroute requests. Also the retry interval when the
+    /// host has not installed a new route. Seconds.
     pub min_time_between_reroutes_s: f64,
+    /// Requests issued without a `set_route` in between before the core gives
+    /// up (one final `RerouteReason::GaveUp` is reported). `0` means no limit.
+    pub max_reroute_attempts: u32,
     /// Arrived when on the last step and this close to the final vertex. Metres.
     pub arrival_distance_m: f64,
     /// Fixes implying a faster movement than this are rejected. Metres/second.
@@ -58,7 +81,12 @@ impl Default for NavigatorConfig {
             off_route_distance_m: 30.0,
             off_route_min_consecutive: 3,
             on_route_min_consecutive: 2,
+            off_route_min_speed_mps: 1.0,
+            off_route_min_movement_m: 5.0,
+            reroute_grace_period_s: 10.0,
+            suppress_off_route_near_destination_m: 50.0,
             min_time_between_reroutes_s: 10.0,
+            max_reroute_attempts: 3,
             arrival_distance_m: 15.0,
             max_speed_mps: f.max_speed_mps,
             process_noise_accel_mps2: f.process_noise_accel_mps2,
@@ -111,10 +139,25 @@ impl NavigatorConfig {
                 return Err(NavError::InvalidConfig(format!("{name} must be positive")));
             }
         }
-        if !self.min_time_between_reroutes_s.is_finite() || self.min_time_between_reroutes_s < 0.0 {
-            return Err(NavError::InvalidConfig(
-                "min_time_between_reroutes_s must be non-negative".into(),
-            ));
+        let non_negative = [
+            (
+                "min_time_between_reroutes_s",
+                self.min_time_between_reroutes_s,
+            ),
+            ("off_route_min_speed_mps", self.off_route_min_speed_mps),
+            ("off_route_min_movement_m", self.off_route_min_movement_m),
+            ("reroute_grace_period_s", self.reroute_grace_period_s),
+            (
+                "suppress_off_route_near_destination_m",
+                self.suppress_off_route_near_destination_m,
+            ),
+        ];
+        for (name, v) in non_negative {
+            if !v.is_finite() || v < 0.0 {
+                return Err(NavError::InvalidConfig(format!(
+                    "{name} must be non-negative"
+                )));
+            }
         }
         if self.off_route_min_consecutive == 0 || self.on_route_min_consecutive == 0 {
             return Err(NavError::InvalidConfig(
@@ -137,6 +180,8 @@ struct RouteData {
     step_start_bearing_rad: Vec<f64>,
     /// Shared instruction strings, one per step.
     instructions: Vec<Arc<str>>,
+    /// Final vertex in the local frame.
+    destination: Enu,
 }
 
 impl RouteData {
@@ -164,6 +209,7 @@ impl RouteData {
             .iter()
             .map(|s| Arc::<str>::from(s.instruction.as_str()))
             .collect();
+        let destination = index.point_at_distance(index.total_length_m());
         Ok(Self {
             route,
             index,
@@ -171,6 +217,7 @@ impl RouteData {
             step_start_m,
             step_start_bearing_rad,
             instructions,
+            destination,
         })
     }
 
@@ -192,27 +239,50 @@ impl RouteData {
     }
 }
 
+/// What one accepted fix produced. Cloning shares the instruction string,
+/// so handing it out does not allocate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Update {
+    /// The new per-fix state.
+    pub position: PositionState,
+    /// The slow-changing state after this fix (also available from
+    /// [`Navigator::trip`]).
+    pub trip: TripState,
+    /// True when `trip` differs from the previous update's trip state or
+    /// carries a reroute request. Push-style hosts forward `trip` only when
+    /// this is set.
+    pub trip_changed: bool,
+}
+
 /// Turn-by-turn navigator. See the module docs.
 pub struct Navigator {
     config: NavigatorConfig,
     data: RouteData,
     filter: LocationFilter,
     matcher: HmmMatcher,
-    state: Option<TripState>,
+    position: Option<PositionState>,
+    trip: Option<TripState>,
     current_step: usize,
     off_route_streak: u32,
     on_route_streak: u32,
+    /// Filtered position where the current off-route streak began.
+    off_route_streak_origin: Enu,
     is_off_route: bool,
     arrived: bool,
     last_accepted_ms: Option<u64>,
+    /// First accepted fix since `new` / `set_route`; anchors the grace period.
+    trip_start_ms: Option<u64>,
     last_reroute_request_ms: Option<u64>,
+    pending_reroute: Option<RerouteRequest>,
+    reroute_attempts: u32,
+    gave_up: bool,
     /// Exponential moving average of filtered speed while moving, for the ETA.
     avg_speed_mps: f64,
     /// Seconds of movement folded into `avg_speed_mps` (saturates at `ETA_WARMUP_S`).
     avg_speed_warmup_s: f64,
 }
 
-/// Time constant of the moving-average speed behind `TripState::eta_s`.
+/// Time constant of the moving-average speed behind `PositionState::eta_s`.
 const ETA_SPEED_TAU_S: f64 = 30.0;
 /// Movement needed before an ETA is reported at all.
 const ETA_WARMUP_S: f64 = 10.0;
@@ -230,14 +300,20 @@ impl Navigator {
             filter: LocationFilter::new(config.filter_config()),
             matcher: HmmMatcher::new(config.matcher_config()),
             data,
-            state: None,
+            position: None,
+            trip: None,
             current_step: 0,
             off_route_streak: 0,
             on_route_streak: 0,
+            off_route_streak_origin: Enu::new(0.0, 0.0),
             is_off_route: false,
             arrived: false,
             last_accepted_ms: None,
+            trip_start_ms: None,
             last_reroute_request_ms: None,
+            pending_reroute: None,
+            reroute_attempts: 0,
+            gave_up: false,
             avg_speed_mps: 0.0,
             avg_speed_warmup_s: 0.0,
         })
@@ -258,31 +334,61 @@ impl Navigator {
         &self.data.index
     }
 
-    /// Latest state, if any fix has been accepted since the route was set.
-    pub fn state(&self) -> Option<&TripState> {
-        self.state.as_ref()
+    /// Latest per-fix state, if any fix has been accepted since the route was set.
+    pub fn position(&self) -> Option<&PositionState> {
+        self.position.as_ref()
     }
 
-    /// Replace the route (after the host rerouted). Trip progress restarts on
-    /// the new route; the reroute rate limit and the stale-fix guard persist.
+    /// Latest slow-changing state, if any fix has been accepted since the route was set.
+    pub fn trip(&self) -> Option<&TripState> {
+        self.trip.as_ref()
+    }
+
+    /// Both halves together. Clones one `Arc`, no allocation.
+    pub fn full_state(&self) -> Option<FullState> {
+        Some(FullState {
+            position: self.position?,
+            trip: self.trip.clone()?,
+        })
+    }
+
+    /// The reroute request the host has not yet answered with `set_route`,
+    /// if any. Cleared when the vehicle rejoins the route on its own.
+    pub fn pending_reroute(&self) -> Option<&RerouteRequest> {
+        self.pending_reroute.as_ref()
+    }
+
+    /// Requests issued since the route was last set.
+    pub fn reroute_attempts(&self) -> u32 {
+        self.reroute_attempts
+    }
+
+    /// Replace the route (after the host rerouted). Trip progress, the
+    /// off-route state, the reroute attempt counter and the grace period
+    /// restart on the new route; the reroute rate limit and the stale-fix
+    /// guard persist.
     pub fn set_route(&mut self, route: Route) -> Result<(), NavError> {
         self.data = RouteData::new(route)?;
         self.filter.reset();
         self.matcher.reset();
-        self.state = None;
+        self.position = None;
+        self.trip = None;
         self.current_step = 0;
         self.off_route_streak = 0;
         self.on_route_streak = 0;
         self.is_off_route = false;
         self.arrived = false;
+        self.trip_start_ms = None;
+        self.clear_reroute();
         Ok(())
     }
 
-    /// Process one fix and return the new state.
+    /// Process one fix.
     ///
     /// Errors leave the state untouched: stale or implausible fixes are
-    /// rejected and the previous [`TripState`] remains current.
-    pub fn update_location(&mut self, raw: RawLocation) -> Result<TripState, NavError> {
+    /// rejected and the previous [`PositionState`] / [`TripState`] remain
+    /// current.
+    pub fn update_location(&mut self, raw: RawLocation) -> Result<Update, NavError> {
         if !raw.point.is_valid() {
             return Err(NavError::InvalidLocation);
         }
@@ -297,35 +403,49 @@ impl Navigator {
 
         let enu = self.data.index.frame().to_enu(raw.point);
         let filtered = self.filter.update(enu, &raw)?;
+        let now_ms = raw.timestamp_ms;
         let dt_s = self
             .last_accepted_ms
-            .map(|last| raw.timestamp_ms.saturating_sub(last) as f64 / 1000.0)
+            .map(|last| now_ms.saturating_sub(last) as f64 / 1000.0)
             .unwrap_or(0.0);
-        self.last_accepted_ms = Some(raw.timestamp_ms);
+        self.last_accepted_ms = Some(now_ms);
+        if self.trip_start_ms.is_none() {
+            self.trip_start_ms = Some(now_ms);
+        }
         self.update_avg_speed(filtered.speed_mps, dt_s);
 
         let input = MatchInput {
             position: filtered.position,
             sigma_m: filtered.position_std_m,
             heading_rad: filtered.heading_rad,
-            timestamp_ms: raw.timestamp_ms,
+            timestamp_ms: now_ms,
         };
         let proj = self.matcher.match_fix(&self.data.index, &input)?;
 
-        self.update_off_route(&proj);
-        let needs_reroute = self.maybe_request_reroute(raw.timestamp_ms);
+        self.update_off_route(&proj, &filtered, now_ms);
+        let reroute = self.maybe_request_reroute(&filtered, now_ms);
         // Steps and arrival only move on fixes that are actually near the
         // route. Without the distance check a fix far from the whole route
         // (the matcher falls back to the nearest segment, often the final
         // vertex) would advance through every step and "arrive" on the first
-        // update, before the off-route hysteresis has had its three fixes.
+        // update, before the off-route hysteresis has had its fixes.
         if !self.is_off_route && proj.distance_from_route_m <= self.config.off_route_distance_m {
             self.update_step(&proj, &filtered);
         }
 
-        let state = self.build_state(&proj, &filtered, needs_reroute);
-        self.state = Some(state.clone());
-        Ok(state)
+        let (position, trip) = self.build_state(&proj, &filtered, reroute);
+        let trip_changed = reroute.is_some()
+            || match &self.trip {
+                None => true,
+                Some(prev) => !same_trip_ignoring_reroute(prev, &trip),
+            };
+        self.position = Some(position);
+        self.trip = Some(trip.clone());
+        Ok(Update {
+            position,
+            trip,
+            trip_changed,
+        })
     }
 
     /// Fold one filtered speed sample into the moving average. Stopped
@@ -343,36 +463,101 @@ impl Navigator {
         self.avg_speed_warmup_s = (self.avg_speed_warmup_s + dt_s).min(ETA_WARMUP_S);
     }
 
-    fn update_off_route(&mut self, proj: &RouteProjection) {
+    fn in_grace_period(&self, now_ms: u64) -> bool {
+        let grace_ms = (self.config.reroute_grace_period_s * 1000.0) as u64;
+        match self.trip_start_ms {
+            Some(start) => now_ms.saturating_sub(start) < grace_ms,
+            None => true,
+        }
+    }
+
+    fn update_off_route(
+        &mut self,
+        proj: &RouteProjection,
+        filtered: &FilteredLocation,
+        now_ms: u64,
+    ) {
         if proj.distance_from_route_m > self.config.off_route_distance_m {
+            // Deviations are ignored while settling, when parked, and at the
+            // destination (where the last metres are rarely on the polyline).
+            let near_destination = filtered.position.distance_to(self.data.destination)
+                <= self.config.suppress_off_route_near_destination_m;
+            if self.in_grace_period(now_ms)
+                || near_destination
+                || filtered.speed_mps < self.config.off_route_min_speed_mps
+            {
+                return;
+            }
+            if self.off_route_streak == 0 {
+                self.off_route_streak_origin = filtered.position;
+            }
             self.off_route_streak += 1;
             self.on_route_streak = 0;
-            if self.off_route_streak >= self.config.off_route_min_consecutive {
+            let moved_m = self.off_route_streak_origin.distance_to(filtered.position);
+            if self.off_route_streak >= self.config.off_route_min_consecutive
+                && moved_m >= self.config.off_route_min_movement_m
+            {
                 self.is_off_route = true;
             }
         } else {
             self.on_route_streak += 1;
             self.off_route_streak = 0;
             if self.on_route_streak >= self.config.on_route_min_consecutive {
+                if self.is_off_route {
+                    // Rejoined on our own: forget the outstanding request.
+                    self.clear_reroute();
+                }
                 self.is_off_route = false;
             }
         }
     }
 
-    /// True on the update where a reroute request is issued.
-    fn maybe_request_reroute(&mut self, now_ms: u64) -> bool {
-        if !self.is_off_route || self.arrived {
-            return false;
+    fn clear_reroute(&mut self) {
+        self.pending_reroute = None;
+        self.reroute_attempts = 0;
+        self.gave_up = false;
+    }
+
+    /// Issues a request on the update where one is due: the first off-route
+    /// fix, then every `min_time_between_reroutes_s` while the host has not
+    /// installed a route, up to `max_reroute_attempts`, then one `GaveUp`.
+    fn maybe_request_reroute(
+        &mut self,
+        filtered: &FilteredLocation,
+        now_ms: u64,
+    ) -> Option<RerouteRequest> {
+        if !self.is_off_route || self.arrived || self.gave_up {
+            return None;
         }
         let min_gap_ms = (self.config.min_time_between_reroutes_s * 1000.0) as u64;
         let due = match self.last_reroute_request_ms {
             None => true,
             Some(last) => now_ms.saturating_sub(last) >= min_gap_ms,
         };
-        if due {
-            self.last_reroute_request_ms = Some(now_ms);
+        if !due {
+            return None;
         }
-        due
+        let limit = self.config.max_reroute_attempts;
+        let frame = self.data.index.frame();
+        let mut request = RerouteRequest {
+            origin: frame.to_geo(filtered.position),
+            heading_deg: filtered.heading_rad.map(bearing_rad_to_deg),
+            destination: frame.to_geo(self.data.destination),
+            attempt: self.reroute_attempts,
+            reason: RerouteReason::GaveUp,
+            timestamp_ms: now_ms,
+        };
+        if limit != 0 && self.reroute_attempts >= limit {
+            self.gave_up = true;
+            self.pending_reroute = None;
+            return Some(request);
+        }
+        self.reroute_attempts += 1;
+        self.last_reroute_request_ms = Some(now_ms);
+        request.attempt = self.reroute_attempts;
+        request.reason = RerouteReason::OffRoute;
+        self.pending_reroute = Some(request);
+        Some(request)
     }
 
     fn update_step(&mut self, proj: &RouteProjection, filtered: &FilteredLocation) {
@@ -420,13 +605,18 @@ impl Navigator {
         &self,
         proj: &RouteProjection,
         filtered: &FilteredLocation,
-        needs_reroute: bool,
-    ) -> TripState {
+        reroute: Option<RerouteRequest>,
+    ) -> (PositionState, TripState) {
         let along = proj.distance_along_route_m;
         let total = self.data.index.total_length_m();
         let last = self.data.last_step();
         let step = self.current_step;
         let next = (step + 1).min(last);
+        let progress = if self.arrived {
+            TripProgress::Arrived
+        } else {
+            TripProgress::Navigating
+        };
         let remaining = (total - along).max(0.0);
         let eta_s = if self.arrived {
             Some(0.0)
@@ -435,23 +625,34 @@ impl Navigator {
         } else {
             None
         };
-        TripState {
+        let position = PositionState {
             snapped: self.data.index.to_snapped(proj),
-            current_step_index: step,
             distance_to_next_maneuver_m: (self.data.step_end_m[step] - along).max(0.0),
             distance_remaining_m: remaining,
-            next_instruction: Arc::clone(&self.data.instructions[next]),
-            is_off_route: self.is_off_route,
-            needs_reroute,
             speed_mps: filtered.speed_mps,
             eta_s,
-            progress: if self.arrived {
-                TripProgress::Arrived
-            } else {
-                TripProgress::Navigating
-            },
-        }
+            is_off_route: self.is_off_route,
+            progress,
+        };
+        let trip = TripState {
+            current_step_index: step,
+            step_count: self.data.route.steps.len(),
+            next_instruction: Arc::clone(&self.data.instructions[next]),
+            is_off_route: self.is_off_route,
+            progress,
+            reroute,
+        };
+        (position, trip)
     }
+}
+
+/// Equality on everything but the per-update `reroute` edge.
+fn same_trip_ignoring_reroute(a: &TripState, b: &TripState) -> bool {
+    a.current_step_index == b.current_step_index
+        && a.step_count == b.step_count
+        && Arc::ptr_eq(&a.next_instruction, &b.next_instruction)
+        && a.is_off_route == b.is_off_route
+        && a.progress == b.progress
 }
 
 #[cfg(test)]
@@ -499,11 +700,28 @@ mod tests {
         }
     }
 
+    /// Update and return the combined state (tests assert on both halves).
+    fn step(nav: &mut Navigator, raw: RawLocation) -> Result<(FullState, bool), NavError> {
+        let u = nav.update_location(raw)?;
+        Ok((
+            nav.full_state().expect("state after update"),
+            u.trip_changed,
+        ))
+    }
+
     #[test]
     fn rejects_bad_route_and_config() {
         let (route, _) = l_route();
         let bad_cfg = NavigatorConfig {
             off_route_distance_m: -1.0,
+            ..NavigatorConfig::default()
+        };
+        assert!(matches!(
+            Navigator::new(route.clone(), bad_cfg),
+            Err(NavError::InvalidConfig(_))
+        ));
+        let bad_cfg = NavigatorConfig {
+            reroute_grace_period_s: -1.0,
             ..NavigatorConfig::default()
         };
         assert!(matches!(
@@ -522,58 +740,63 @@ mod tests {
     fn drives_through_steps_and_arrives() {
         let (route, frame) = l_route();
         let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
-        assert!(nav.state().is_none());
+        assert!(nav.position().is_none());
+        assert!(nav.trip().is_none());
+        assert!(nav.full_state().is_none());
 
         let mut seen = Vec::new();
+        let mut trip_changes = 0;
         let mut t = 0;
         // East leg at 10 m/s.
         for k in 0..=30 {
-            let s = nav
-                .update_location(fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0)))
-                .unwrap();
+            let (s, changed) =
+                step(&mut nav, fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0))).unwrap();
             t += 1;
-            if seen.last() != Some(&s.current_step_index) {
-                seen.push(s.current_step_index);
+            trip_changes += changed as usize;
+            if seen.last() != Some(&s.trip.current_step_index) {
+                seen.push(s.trip.current_step_index);
             }
-            assert!(!s.is_off_route);
-            assert!(!s.needs_reroute);
+            assert!(!s.position.is_off_route);
+            assert!(!s.needs_reroute());
+            assert_eq!(s.trip.step_count, 3);
         }
         // North leg.
         let mut final_state = None;
         for k in 1..=30 {
-            let s = nav
-                .update_location(fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0)))
-                .unwrap();
+            let (s, changed) =
+                step(&mut nav, fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0))).unwrap();
             t += 1;
-            if seen.last() != Some(&s.current_step_index) {
-                seen.push(s.current_step_index);
+            trip_changes += changed as usize;
+            if seen.last() != Some(&s.trip.current_step_index) {
+                seen.push(s.trip.current_step_index);
             }
             final_state = Some(s);
         }
         assert_eq!(seen, vec![0, 1, 2]);
+        // First fix, two step advances (arrival coincides with the last).
+        assert_eq!(trip_changes, 3);
         let s = final_state.unwrap();
-        assert_eq!(s.progress, TripProgress::Arrived);
-        assert!(s.distance_remaining_m < 15.0);
-        assert_eq!(&*s.next_instruction, "Arrive");
+        assert_eq!(s.position.progress, TripProgress::Arrived);
+        assert_eq!(s.trip.progress, TripProgress::Arrived);
+        assert!(s.position.distance_remaining_m < 15.0);
+        assert_eq!(&*s.trip.next_instruction, "Arrive");
         // Arrival is sticky.
-        let s = nav
-            .update_location(fix(&frame, 300.0, 310.0, t, Some(0.0)))
-            .unwrap();
-        assert_eq!(s.progress, TripProgress::Arrived);
+        let (s, changed) = step(&mut nav, fix(&frame, 300.0, 310.0, t, Some(0.0))).unwrap();
+        assert_eq!(s.trip.progress, TripProgress::Arrived);
+        assert!(!changed);
     }
 
     #[test]
     fn next_instruction_and_distance_to_maneuver() {
         let (route, frame) = l_route();
         let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
-        let s = nav
-            .update_location(fix(&frame, 100.0, 0.0, 0, Some(90.0)))
-            .unwrap();
-        assert_eq!(s.current_step_index, 0);
-        assert_eq!(&*s.next_instruction, "Turn left");
-        assert!((s.distance_to_next_maneuver_m - 200.0).abs() < 1.0);
-        assert!((s.distance_remaining_m - 500.0).abs() < 1.0);
-        assert_eq!(s.progress, TripProgress::Navigating);
+        let (s, changed) = step(&mut nav, fix(&frame, 100.0, 0.0, 0, Some(90.0))).unwrap();
+        assert!(changed, "first update always reports a trip change");
+        assert_eq!(s.trip.current_step_index, 0);
+        assert_eq!(&*s.trip.next_instruction, "Turn left");
+        assert!((s.position.distance_to_next_maneuver_m - 200.0).abs() < 1.0);
+        assert!((s.position.distance_remaining_m - 500.0).abs() < 1.0);
+        assert_eq!(s.position.progress, TripProgress::Navigating);
     }
 
     #[test]
@@ -582,17 +805,27 @@ mod tests {
         // is the final one, so along-route distance alone said "arrived" on
         // the very first fix.
         let (route, frame) = l_route();
-        let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
+        let cfg = NavigatorConfig {
+            reroute_grace_period_s: 0.0,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route, cfg).unwrap();
         let mut off_route_seen = false;
         for k in 0..10 {
-            let s = nav
-                .update_location(fix(&frame, 5000.0 + k as f64 * 1.5, 5000.0, k, Some(90.0)))
-                .unwrap();
-            assert_eq!(s.current_step_index, 0, "fix {k} advanced");
-            assert_eq!(s.progress, TripProgress::Navigating, "fix {k} arrived");
-            assert_eq!(&*s.next_instruction, "Turn left");
-            assert!(s.snapped.distance_from_route_m > 1000.0);
-            off_route_seen |= s.is_off_route;
+            let (s, _) = step(
+                &mut nav,
+                fix(&frame, 5000.0 + k as f64 * 1.5, 5000.0, k, Some(90.0)),
+            )
+            .unwrap();
+            assert_eq!(s.trip.current_step_index, 0, "fix {k} advanced");
+            assert_eq!(
+                s.position.progress,
+                TripProgress::Navigating,
+                "fix {k} arrived"
+            );
+            assert_eq!(&*s.trip.next_instruction, "Turn left");
+            assert!(s.position.snapped.distance_from_route_m > 1000.0);
+            off_route_seen |= s.position.is_off_route;
         }
         assert!(off_route_seen, "should be flagged off-route instead");
     }
@@ -622,7 +855,7 @@ mod tests {
         }
         pts.push(Enu::new(0.0, 0.0));
         let geometry: Vec<GeoPoint> = pts.iter().map(|e| frame.to_geo(*e)).collect();
-        let step = |i: &str, m, s, e, d| RouteStep {
+        let mk = |i: &str, m, s, e, d| RouteStep {
             instruction: i.to_string(),
             maneuver: m,
             start_index: s,
@@ -632,32 +865,34 @@ mod tests {
         let route = Route {
             geometry,
             steps: vec![
-                step("North", ManeuverType::Depart, 0, 3, 30.0),
-                step("West", ManeuverType::TurnLeft, 3, 6, 30.0),
-                step("South", ManeuverType::TurnLeft, 6, 9, 30.0),
-                step("East", ManeuverType::TurnLeft, 9, 12, 30.0),
-                step("Arrive", ManeuverType::Arrive, 12, 12, 0.0),
+                mk("North", ManeuverType::Depart, 0, 3, 30.0),
+                mk("West", ManeuverType::TurnLeft, 3, 6, 30.0),
+                mk("South", ManeuverType::TurnLeft, 6, 9, 30.0),
+                mk("East", ManeuverType::TurnLeft, 9, 12, 30.0),
+                mk("Arrive", ManeuverType::Arrive, 12, 12, 0.0),
             ],
         };
         let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
         // Standing still at the start, 2 m east: nearer the final (eastbound)
         // leg's end than the first leg, and no heading yet.
         for k in 0..5 {
-            let s = nav
-                .update_location(RawLocation {
+            let (s, _) = step(
+                &mut nav,
+                RawLocation {
                     point: frame.to_geo(Enu::new(2.0, -1.0)),
                     accuracy_m: Some(8.0),
                     speed_mps: None,
                     course_deg: None,
                     timestamp_ms: 1_000_000 + k * 1000,
-                })
-                .unwrap();
-            assert_eq!(s.current_step_index, 0, "fix {k}");
-            assert_eq!(s.progress, TripProgress::Navigating, "fix {k}");
+                },
+            )
+            .unwrap();
+            assert_eq!(s.trip.current_step_index, 0, "fix {k}");
+            assert_eq!(s.position.progress, TripProgress::Navigating, "fix {k}");
             assert!(
-                s.distance_remaining_m > 100.0,
+                s.position.distance_remaining_m > 100.0,
                 "fix {k}: {}",
-                s.distance_remaining_m
+                s.position.distance_remaining_m
             );
         }
     }
@@ -667,24 +902,22 @@ mod tests {
         let (route, frame) = l_route();
         let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
         // First fix: nothing to average yet.
-        let s = nav
-            .update_location(fix(&frame, 0.0, 0.0, 0, Some(90.0)))
-            .unwrap();
-        assert_eq!(s.eta_s, None);
+        let (s, _) = step(&mut nav, fix(&frame, 0.0, 0.0, 0, Some(90.0))).unwrap();
+        assert_eq!(s.position.eta_s, None);
         // Cruise east at 10 m/s for 20 s; ETA should settle near remaining / 10.
         let mut last = s;
         for k in 1..=20 {
-            last = nav
-                .update_location(fix(&frame, k as f64 * 10.0, 0.0, k, Some(90.0)))
-                .unwrap();
+            last = step(&mut nav, fix(&frame, k as f64 * 10.0, 0.0, k, Some(90.0)))
+                .unwrap()
+                .0;
         }
         assert!(
-            (last.speed_mps - 10.0).abs() < 1.5,
+            (last.position.speed_mps - 10.0).abs() < 1.5,
             "speed {}",
-            last.speed_mps
+            last.position.speed_mps
         );
-        let eta = last.eta_s.expect("eta after warm-up");
-        let expected = last.distance_remaining_m / 10.0;
+        let eta = last.position.eta_s.expect("eta after warm-up");
+        let expected = last.position.distance_remaining_m / 10.0;
         assert!(
             (eta - expected).abs() < expected * 0.2,
             "eta {eta} vs {expected}"
@@ -697,13 +930,13 @@ mod tests {
             t += 1;
         }
         for k in 1..=30 {
-            last = nav
-                .update_location(fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0)))
-                .unwrap();
+            last = step(&mut nav, fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0)))
+                .unwrap()
+                .0;
             t += 1;
         }
-        assert_eq!(last.progress, TripProgress::Arrived);
-        assert_eq!(last.eta_s, Some(0.0));
+        assert_eq!(last.position.progress, TripProgress::Arrived);
+        assert_eq!(last.position.eta_s, Some(0.0));
     }
 
     #[test]
@@ -717,20 +950,21 @@ mod tests {
             t += 1;
         }
         // 15 m short of the corner, still heading east → no advance.
-        let s = nav
-            .update_location(fix(&frame, 285.0, 0.0, t, Some(90.0)))
-            .unwrap();
+        let (s, _) = step(&mut nav, fix(&frame, 285.0, 0.0, t, Some(90.0))).unwrap();
         t += 1;
-        assert_eq!(s.current_step_index, 0);
+        assert_eq!(s.trip.current_step_index, 0);
         // Same distance but heading north: the filter needs a couple of fixes
         // to swing its heading estimate, then we advance.
         let mut advanced = false;
         for k in 0..4 {
-            let s = nav
-                .update_location(fix(&frame, 288.0, 3.0 + k as f64 * 3.0, t, Some(0.0)))
-                .unwrap();
+            let (s, changed) = step(
+                &mut nav,
+                fix(&frame, 288.0, 3.0 + k as f64 * 3.0, t, Some(0.0)),
+            )
+            .unwrap();
             t += 1;
-            if s.current_step_index == 1 {
+            if s.trip.current_step_index == 1 {
+                assert!(changed);
                 advanced = true;
                 break;
             }
@@ -743,6 +977,7 @@ mod tests {
         let (route, frame) = l_route();
         let cfg = NavigatorConfig {
             min_time_between_reroutes_s: 5.0,
+            max_reroute_attempts: 0,
             ..NavigatorConfig::default()
         };
         let mut nav = Navigator::new(route, cfg).unwrap();
@@ -756,14 +991,21 @@ mod tests {
         let mut reroutes = Vec::new();
         let mut first_off = None;
         for k in 0..12 {
-            let s = nav
-                .update_location(fix(&frame, 110.0 + k as f64 * 10.0, -80.0, t, Some(90.0)))
-                .unwrap();
-            if s.is_off_route && first_off.is_none() {
+            let (s, changed) = step(
+                &mut nav,
+                fix(&frame, 110.0 + k as f64 * 10.0, -80.0, t, Some(90.0)),
+            )
+            .unwrap();
+            if s.position.is_off_route && first_off.is_none() {
                 first_off = Some(k);
+                assert!(changed, "off-route transition is a trip change");
             }
-            if s.needs_reroute {
-                reroutes.push(t);
+            if let Some(req) = s.trip.reroute {
+                assert!(changed, "a reroute request is a trip change");
+                assert_eq!(req.reason, RerouteReason::OffRoute);
+                assert_eq!(req.timestamp_ms, 1_000_000 + t * 1000);
+                assert_eq!(nav.pending_reroute(), Some(&req));
+                reroutes.push((t, req.attempt));
             }
             t += 1;
         }
@@ -775,17 +1017,23 @@ mod tests {
             "first off-route at {first_off}"
         );
         assert!(!reroutes.is_empty());
-        for w in reroutes.windows(2) {
-            assert!(w[1] - w[0] >= 5, "reroutes too close: {reroutes:?}");
+        for (i, (_, attempt)) in reroutes.iter().enumerate() {
+            assert_eq!(*attempt as usize, i + 1);
         }
-        // Come back onto the route: two good fixes clear the flag.
+        for w in reroutes.windows(2) {
+            assert!(w[1].0 - w[0].0 >= 5, "reroutes too close: {reroutes:?}");
+        }
+        // Come back onto the route: two good fixes clear the flag and drop
+        // the pending request.
         let mut cleared_after = None;
         for k in 0..6 {
-            let s = nav
-                .update_location(fix(&frame, 240.0 + k as f64 * 5.0, 0.0, t, Some(90.0)))
-                .unwrap();
+            let (s, _) = step(
+                &mut nav,
+                fix(&frame, 240.0 + k as f64 * 5.0, 0.0, t, Some(90.0)),
+            )
+            .unwrap();
             t += 1;
-            if !s.is_off_route {
+            if !s.position.is_off_route {
                 cleared_after = Some(k);
                 break;
             }
@@ -794,15 +1042,127 @@ mod tests {
         // filter is concerned, so allow a few fixes of lag before the two
         // consecutive good fixes clear the flag.
         assert!(cleared_after.is_some_and(|k| k <= 6), "{cleared_after:?}");
+        assert!(nav.pending_reroute().is_none());
+        assert_eq!(nav.reroute_attempts(), 0);
+    }
+
+    #[test]
+    fn gives_up_after_max_attempts() {
+        let (route, frame) = l_route();
+        let cfg = NavigatorConfig {
+            min_time_between_reroutes_s: 2.0,
+            max_reroute_attempts: 2,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route, cfg).unwrap();
+        let mut t = 0;
+        for k in 0..=10 {
+            nav.update_location(fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0)))
+                .unwrap();
+            t += 1;
+        }
+        let mut events = Vec::new();
+        for k in 0..16 {
+            let (s, _) = step(
+                &mut nav,
+                fix(&frame, 110.0 + k as f64 * 10.0, -80.0, t, Some(90.0)),
+            )
+            .unwrap();
+            if let Some(req) = s.trip.reroute {
+                events.push((req.reason, req.attempt));
+            }
+            t += 1;
+        }
+        assert_eq!(
+            events,
+            vec![
+                (RerouteReason::OffRoute, 1),
+                (RerouteReason::OffRoute, 2),
+                (RerouteReason::GaveUp, 2),
+            ]
+        );
+        assert!(nav.pending_reroute().is_none());
+        assert_eq!(nav.reroute_attempts(), 2);
+    }
+
+    #[test]
+    fn grace_period_suppresses_early_deviations() {
+        let (route, frame) = l_route();
+        let cfg = NavigatorConfig {
+            reroute_grace_period_s: 30.0,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route, cfg).unwrap();
+        // Start 80 m south of the route and drive east: off the route from
+        // the first fix, but inside the grace period for 30 s.
+        let mut first_off = None;
+        for t in 0..40u64 {
+            let (s, _) = step(&mut nav, fix(&frame, t as f64 * 5.0, -80.0, t, Some(90.0))).unwrap();
+            if s.position.is_off_route && first_off.is_none() {
+                first_off = Some(t);
+            }
+        }
+        let first_off = first_off.expect("eventually off-route");
+        assert!(first_off >= 30 + 2, "flagged at {first_off} s");
+        assert!(first_off <= 30 + 6, "flagged at {first_off} s");
+    }
+
+    #[test]
+    fn parked_vehicle_never_goes_off_route() {
+        let (route, frame) = l_route();
+        let cfg = NavigatorConfig {
+            reroute_grace_period_s: 0.0,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route, cfg).unwrap();
+        // Stationary 60 m off the route with zero reported speed.
+        for t in 0..30u64 {
+            let mut raw = fix(&frame, 150.0, -60.0, t, None);
+            raw.speed_mps = Some(0.0);
+            let (s, _) = step(&mut nav, raw).unwrap();
+            assert!(!s.position.is_off_route, "fix {t}");
+            assert!(s.trip.reroute.is_none());
+        }
+    }
+
+    #[test]
+    fn deviations_near_destination_are_suppressed() {
+        let (route, frame) = l_route();
+        let cfg = NavigatorConfig {
+            reroute_grace_period_s: 0.0,
+            suppress_off_route_near_destination_m: 120.0,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route, cfg).unwrap();
+        // Drive the whole route, then wander 60 m east of the final vertex
+        // (300, 300) at speed: within 120 m of it, so never off-route.
+        let mut t = 0;
+        for k in 0..=30 {
+            nav.update_location(fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0)))
+                .unwrap();
+            t += 1;
+        }
+        for k in 1..=28 {
+            nav.update_location(fix(&frame, 300.0, k as f64 * 10.0, t, Some(0.0)))
+                .unwrap();
+            t += 1;
+        }
+        for k in 0..10 {
+            let (s, _) = step(
+                &mut nav,
+                fix(&frame, 360.0, 250.0 + k as f64 * 5.0, t, Some(0.0)),
+            )
+            .unwrap();
+            t += 1;
+            assert!(!s.position.is_off_route, "fix {k}");
+        }
     }
 
     #[test]
     fn stale_and_implausible_fixes_keep_previous_state() {
         let (route, frame) = l_route();
         let mut nav = Navigator::new(route, NavigatorConfig::default()).unwrap();
-        let s0 = nav
-            .update_location(fix(&frame, 50.0, 0.0, 10, Some(90.0)))
-            .unwrap();
+        let (s0, _) = step(&mut nav, fix(&frame, 50.0, 0.0, 10, Some(90.0))).unwrap();
         assert!(matches!(
             nav.update_location(fix(&frame, 60.0, 0.0, 10, Some(90.0))),
             Err(NavError::StaleLocation { .. })
@@ -814,7 +1174,7 @@ mod tests {
         let mut bad = fix(&frame, 60.0, 0.0, 12, None);
         bad.point.lat = 100.0;
         assert_eq!(nav.update_location(bad), Err(NavError::InvalidLocation));
-        assert_eq!(nav.state(), Some(&s0));
+        assert_eq!(nav.full_state(), Some(s0));
     }
 
     #[test]
@@ -831,19 +1191,50 @@ mod tests {
             ))
             .unwrap();
         }
-        assert_eq!(nav.state().unwrap().current_step_index, 1);
+        assert_eq!(nav.trip().unwrap().current_step_index, 1);
         nav.set_route(route).unwrap();
-        assert!(nav.state().is_none());
+        assert!(nav.position().is_none());
+        assert!(nav.trip().is_none());
         // Older fix than the last accepted one is still rejected.
         assert!(matches!(
             nav.update_location(fix(&frame, 0.0, 0.0, 3, None)),
             Err(NavError::StaleLocation { .. })
         ));
-        let s = nav
-            .update_location(fix(&frame, 20.0, 0.0, 40, Some(90.0)))
-            .unwrap();
-        assert_eq!(s.current_step_index, 0);
-        assert_eq!(s.progress, TripProgress::Navigating);
+        let (s, changed) = step(&mut nav, fix(&frame, 20.0, 0.0, 40, Some(90.0))).unwrap();
+        assert!(changed);
+        assert_eq!(s.trip.current_step_index, 0);
+        assert_eq!(s.trip.progress, TripProgress::Navigating);
+    }
+
+    #[test]
+    fn set_route_answers_pending_reroute() {
+        let (route, frame) = l_route();
+        let cfg = NavigatorConfig {
+            min_time_between_reroutes_s: 5.0,
+            ..NavigatorConfig::default()
+        };
+        let mut nav = Navigator::new(route.clone(), cfg).unwrap();
+        let mut t = 0;
+        for k in 0..=10 {
+            nav.update_location(fix(&frame, k as f64 * 10.0, 0.0, t, Some(90.0)))
+                .unwrap();
+            t += 1;
+        }
+        let mut requested = false;
+        for k in 0..8 {
+            nav.update_location(fix(&frame, 110.0 + k as f64 * 10.0, -80.0, t, Some(90.0)))
+                .unwrap();
+            t += 1;
+            if nav.pending_reroute().is_some() {
+                requested = true;
+                break;
+            }
+        }
+        assert!(requested);
+        assert_eq!(nav.reroute_attempts(), 1);
+        nav.set_route(route).unwrap();
+        assert!(nav.pending_reroute().is_none());
+        assert_eq!(nav.reroute_attempts(), 0);
     }
 
     #[test]

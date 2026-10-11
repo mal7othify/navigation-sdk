@@ -10,6 +10,8 @@ options:
 packages:
   NavSDK:
     path: ../NavSDK
+  NavSDKPush:
+    path: ../NavSDKPush
 targets:
   Demo:
     type: application
@@ -18,6 +20,8 @@ targets:
       - path: Demo
     dependencies:
       - package: NavSDK
+      - package: NavSDKPush
+        product: NavCorePush
     info:
       path: Demo/Info.plist
       properties:
@@ -42,6 +46,8 @@ targets:
     dependencies:
       - target: Demo
       - package: NavSDK
+      - package: NavSDKPush
+        product: NavCorePush
     settings:
       base:
         SWIFT_VERSION: "5.0"
@@ -60,3 +66,4 @@ schemes:
       targets:
         - DemoTests
         - package: NavSDK/NavSDKTests
+        - package: NavSDKPush/NavSDKPushTests

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/navcore",
     "crates/navcore-ffi",
+    "crates/navcore-boltffi",
     "uniffi-bindgen",
 ]
 

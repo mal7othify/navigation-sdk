@@ -18,6 +18,16 @@ ios/NavSDK/Tests/NavSDKTests/Fixtures/
 ios/Demo/Demo/Fixtures/
 ios/NavSDK/NavCoreFFI.xcframework/
 
+# Generated BoltFFI bindings and libraries (reproduce with `boltffi pack` in crates/navcore-boltffi)
+android/navsdk-push/generated/
+android/navsdk-push/src/main/jniLibs/
+android/navsdk-push/desktopJniLibs/
+android/navsdk-push/boltffi/
+ios/NavSDKPush/Sources/BoltFFI/
+ios/NavSDKPush/*.xcframework/
+ios/NavSDKPush/*.xcframework.zip
+ios/NavSDKPush/Tests/NavSDKPushTests/Fixtures/
+
 # Android
 android/**/build/
 android/.gradle/
@@ -26,6 +36,7 @@ android/local.properties
 *.apk
 
 # iOS / Xcode
+ios/Demo/boundary-bench.md
 ios/**/DerivedData/
 ios/**/.build/
 ios/**/xcuserdata/

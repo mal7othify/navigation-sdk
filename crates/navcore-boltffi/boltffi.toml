@@ -1,0 +1,64 @@
+# BoltFFI configuration for Approach B (push). Run the CLI from this directory:
+#   boltffi generate kotlin | swift      # bindings only
+#   boltffi pack android --release       # jniLibs + Kotlin → android/navsdk-push
+#   boltffi pack apple --release         # XCFramework + SwiftPM → ios/NavSDKPush
+# Generated files are gitignored; never edit them.
+experimental = []
+
+[cargo]
+global_args = []
+
+[package]
+name = "navcore-boltffi"
+crate = "navcore-boltffi"
+
+[targets.apple]
+enabled = true
+output = "../../ios/NavSDKPush"
+deployment_target = "15.0"
+include_macos = false
+
+[targets.apple.swift]
+module_name = "NavCorePush"
+tools_version = "5.9"
+error_style = "throwing"
+
+[targets.apple.spm]
+distribution = "local"
+layout = "bundled"
+wrapper_sources = "Sources"
+skip_package_swift = true
+
+[targets.android]
+enabled = true
+output = "../../android/navsdk-push/boltffi"
+min_sdk = 24
+architectures = ["arm64", "armv7", "x86_64"]
+
+[targets.android.kotlin]
+package = "com.navsdk.push.core"
+module_name = "NavCorePush"
+output = "../../android/navsdk-push/generated"
+desktop_loader = "bundled"
+api_style = "top_level"
+error_style = "throwing"
+factory_style = "constructors"
+
+[targets.android.kotlin.desktop_pack]
+enabled = true
+output = "../../android/navsdk-push/desktopJniLibs"
+
+[targets.android.pack]
+output = "../../android/navsdk-push/src/main/jniLibs"
+
+[targets.wasm]
+enabled = false
+
+[targets.java.jvm]
+enabled = false
+
+[targets.python]
+enabled = false
+
+[targets.csharp]
+enabled = false

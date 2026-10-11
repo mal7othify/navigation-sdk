@@ -28,6 +28,9 @@ jobs:
       - uses: taiki-e/cache-cargo-install-action@v2
         with:
           tool: cargo-ndk
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: boltffi_cli
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -36,8 +39,10 @@ jobs:
         with:
           packages: platform-tools platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358
       - uses: gradle/actions/setup-gradle@v4
-      - name: cross-compile + bindings
-        run: scripts/build-android.sh
+      - name: cross-compile + bindings (both approaches)
+        run: |
+          scripts/build-android.sh
+          scripts/build-boltffi-android.sh
       - name: assemble debug APK
         working-directory: android
         run: ./gradlew :demo:assembleDebug --console=plain

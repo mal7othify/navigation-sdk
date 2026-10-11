@@ -4,28 +4,10 @@
 //! cargo run -p navcore --features serde --example gen_fixtures
 //! ```
 
-use std::f64::consts::TAU;
-
 use navcore::fixtures::{fixtures_dir, Expected, Fixture};
 use navcore::geo::{bearing_rad_to_deg, Enu, LocalFrame, RouteIndex};
+use navcore::sim::Rng;
 use navcore::{GeoPoint, ManeuverType, RawLocation, Route, RouteStep};
-
-/// xorshift64* — small, deterministic, dependency-free.
-struct Rng(u64);
-
-impl Rng {
-    fn uniform(&mut self) -> f64 {
-        self.0 ^= self.0 >> 12;
-        self.0 ^= self.0 << 25;
-        self.0 ^= self.0 >> 27;
-        (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
-    }
-    fn gauss(&mut self) -> f64 {
-        let u1 = self.uniform().max(1e-12);
-        let u2 = self.uniform();
-        (-2.0 * u1.ln()).sqrt() * (TAU * u2).cos()
-    }
-}
 
 /// A route described as corner waypoints in a local frame, each corner
 /// carrying the manoeuvre performed *at* it.
@@ -124,7 +106,7 @@ fn simulate(
     let index = RouteIndex::new(&route.geometry).expect("route valid");
     let frame = *index.frame();
     let total = index.total_length_m();
-    let mut rng = Rng(p.seed);
+    let mut rng = Rng::new(p.seed);
     let mut trace = Vec::new();
     let mut truth = Vec::new();
     let mut ts: u64 = 1_700_000_000_000;

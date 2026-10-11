@@ -38,6 +38,13 @@ android {
     sourceSets {
         // Ship the repo fixtures as assets so the demo can replay any of them.
         getByName("main").assets.srcDirs(rootProject.projectDir.resolve("../fixtures"))
+        // The boundary benchmark (src/test) loads both host libraries: the
+        // BoltFFI desktop JNI library comes from classpath resources.
+        getByName("test").resources.srcDir(rootProject.projectDir.resolve("navsdk-push/boltffi/desktopJniLibs"))
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -49,6 +56,7 @@ kotlin {
 
 dependencies {
     implementation(project(":navsdk"))
+    implementation(project(":navsdk-push"))
 
     val composeBom = platform(libs.compose.bom)
     implementation(composeBom)
@@ -61,8 +69,22 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.play.services.location)
 
+    // Boundary benchmark on the JVM (scripts/bench-boundary.sh).
+    testImplementation(libs.junit)
+    testImplementation(libs.jna.jar)
+    testImplementation(libs.org.json)
+
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.coroutines.test)
+}
+
+// Point JNA at the host-built UniFFI library and the benchmark at the fixtures.
+tasks.withType<Test>().configureEach {
+    systemProperty("jna.library.path", rootProject.projectDir.resolve("../target/release").absolutePath)
+    systemProperty("navsdk.fixtures", rootProject.projectDir.resolve("../fixtures").absolutePath)
+    systemProperty("navsdk.bench.out", layout.buildDirectory.file("boundary-bench.json").get().asFile.absolutePath)
+    System.getProperty("navsdk.bench.calls")?.let { systemProperty("navsdk.bench.calls", it) }
+    testLogging.showStandardStreams = true
 }

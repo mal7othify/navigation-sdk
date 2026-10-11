@@ -58,9 +58,18 @@ scripts/check.sh                 # fmt --check, clippy -D warnings, test  (must 
 cargo test -p navcore            # core only
 cargo bench -p navcore           # geometry / matcher / navigator benchmarks (Phase 1+)
 scripts/gen-bindings.sh          # regenerate Kotlin + Swift bindings (Phase 5+)
-scripts/build-android.sh         # cross-compile + bindings → android/navsdk (Phase 6+)
-scripts/build-ios.sh             # XCFramework + bindings → ios/NavSDK (Phase 7+)
+scripts/build-android.sh         # A (pull): cross-compile + UniFFI bindings → android/navsdk (Phase 6+)
+scripts/build-ios.sh             # A (pull): XCFramework + bindings → ios/NavSDK (Phase 7+)
+scripts/build-boltffi-android.sh # B (push): boltffi pack android → android/navsdk-push (Phase 11+)
+scripts/build-boltffi-ios.sh     # B (push): boltffi pack apple → ios/NavSDKPush (Phase 11+)
+scripts/bench-boundary.sh        # Phase 14: FFI boundary µs per call, JVM + Swift
+scripts/measure-sizes.sh         # Phase 14: library sizes and generated/wrapper line counts
 ```
+
+Plan v2 (`docs/PLAN-v2-pull-vs-push.md`) added a second, complete binding layer so the two can be compared on the
+same core: **A, pull** (`navcore-ffi`, UniFFI + JNA, host calls `update_location`) and **B, push**
+(`navcore-boltffi`, BoltFFI + JNI, host subscribes to listeners, the core calls the host's `ReplanningService`).
+The demos have Pull / Push / Both tabs; Both feeds one trace to both sessions in lockstep and flags divergence.
 
 Layout notes:
 
@@ -75,11 +84,19 @@ regenerate, then update the Kotlin/Swift wrappers.
 
 Decisions made while resolving gaps in the plan (keep consistent):
 
-- `TripState` has a `needs_reroute: bool` field. It is an edge flag: true only on the update that issues a
-  (rate-limited) reroute request.
+- Plan v2 (`docs/PLAN-v2-pull-vs-push.md`) splits the state in two: `PositionState` (every fix, `Copy`) and
+  `TripState` (step index, instruction, off-route, progress, reroute). `Navigator::update_location` returns
+  `Update { position, trip, trip_changed }`; `trip_changed` is true exactly when the trip state differs from the
+  previous update's or carries a reroute request. The pull API returns `FullState { position, trip }`.
+- `TripState.reroute: Option<RerouteRequest>` replaces the old `needs_reroute` bool. It is an edge: `Some` only on the
+  update that issues a request. The core owns the policy (grace period, min speed/movement, consecutive fixes,
+  rate-limited retries up to `max_reroute_attempts`, then one `RerouteReason::GaveUp`); `set_route` answers a
+  pending request and resets the attempt counter; rejoining the route on your own drops it.
+- `navcore::sim::RouteSimulator` is the one simulator (seeded xorshift64\*, no `rand`). `gen_fixtures` uses its
+  `Rng`, and the fixtures were verified byte-identical after the switch.
 - `TripState.next_instruction` is `Arc<str>` in the core (no allocation per update); the FFI layer copies to `String`.
-- `TripState` also carries `speed_mps` (filtered ground speed) and `eta_s: Option<f64>` (remaining distance over a
-  30 s moving-average speed; `None` until ~10 s of movement, `Some(0.0)` once arrived). Stopped samples hold the
+- `PositionState` also carries `speed_mps` (filtered ground speed) and `eta_s: Option<f64>` (remaining distance over
+  a 30 s moving-average speed; `None` until ~10 s of movement, `Some(0.0)` once arrived). Stopped samples hold the
   average so a red light does not inflate the ETA.
 - Steps and arrival only move on fixes within `off_route_distance_m` of the route. Without that gate a fix far from
   the whole route snaps to the nearest segment (often the final vertex) and "arrives" on the first update, before
@@ -88,9 +105,11 @@ Decisions made while resolving gaps in the plan (keep consistent):
   with no map or routing service: `walk_course(origin, heading_deg, leg_m)` is a zigzag (Depart, TurnRight,
   TurnLeft, Arrive √5·leg from the start, vertices every 10 m) and `direct_route(from, to)` is the stand-in reroute, capped at
   50 km so a placeholder fixture route on another continent cannot produce a 500k-vertex line. Both are exported
-  over FFI. The demos auto-reroute only while a walking course is active, never on the placeholder fixture route. The demos' Device mode has a "Start walking course here" button, auto-installs a
-  `direct_route` on each `needs_reroute`, and draws a schematic map (route, current step, raw fix, snapped point)
-  on a plain canvas; no map tiles anywhere.
+  over both FFI layers. The demos' Device mode has a "Start walking course here" button and draws a schematic map
+  (route, current step, raw fix, snapped point) on a plain canvas; no map tiles anywhere. While a course is active
+  each reroute request is answered with a `direct_route` to the destination: the pull wrapper's replanner closure
+  installs it, the push core's `ReplanningService` returns it. On the placeholder fixture route in Device mode the
+  replanners decline (the phone is nowhere near it); replaying or simulating, they reinstall the same route.
 - The HMM matcher applies a start prior on the first fix after a (re)start (`MatcherConfig::start_prior`, 2.0 nats
   at the far end of the route, scaled by along/total). Routes begin where the traveller is; on a loop whose start
   and destination coincide, the first fix was otherwise a coin toss and the losing side was an instant, sticky

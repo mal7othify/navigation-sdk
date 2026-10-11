@@ -40,7 +40,7 @@ proptest! {
                 course_deg: None,
                 timestamp_ms: 1_000_000 + k as u64 * 1000,
             };
-            let s = nav.update_location(raw).unwrap();
+            let s = nav.update_location(raw).unwrap().position;
             if let Some((was_on, prev_remaining)) = prev {
                 if was_on && !s.is_off_route {
                     prop_assert!(
