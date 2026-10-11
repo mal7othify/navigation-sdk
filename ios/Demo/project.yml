@@ -29,7 +29,9 @@ targets:
       base:
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGNING_ALLOWED: "NO"
+        # Simulator builds (CI) stay unsigned; device builds sign with the team below.
+        "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": "NO"
+        DEVELOPMENT_TEAM: TP8U87Z4X4
         PRODUCT_BUNDLE_IDENTIFIER: com.navsdk.demo
         TARGETED_DEVICE_FAMILY: "1"
   DemoTests:
@@ -43,7 +45,8 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "5.0"
-        CODE_SIGNING_ALLOWED: "NO"
+        "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": "NO"
+        DEVELOPMENT_TEAM: TP8U87Z4X4
 schemes:
   Demo:
     build:

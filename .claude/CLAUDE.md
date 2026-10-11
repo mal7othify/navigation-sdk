@@ -105,8 +105,10 @@ Decisions made while resolving gaps in the plan (keep consistent):
   the simulator slices, regenerates bindings, writes `ios/NavSDK/NavCoreFFI.xcframework` (gitignored) and copies
   `fixtures/*.json` into the test and demo bundles (gitignored). Run it before any `xcodebuild`.
 - The demo Xcode project is generated from `ios/Demo/project.yml` with XcodeGen and the `.xcodeproj` is committed, so
-  a clone builds without XcodeGen; rerun `xcodegen generate` after editing `project.yml`. Homebrew is broken on this
-  machine (x86_64 install); the XcodeGen release zip from GitHub works as a drop-in.
+  a clone builds without XcodeGen; rerun `xcodegen generate` after editing `project.yml`.
+  Code signing is disabled only for `sdk=iphonesimulator*` (so CI needs no Apple account); device builds sign
+  automatically with `DEVELOPMENT_TEAM` from `project.yml`. Change the team there, not in Xcode's Signing tab.
+  Homebrew is broken on this machine (x86_64 install); the XcodeGen release zip from GitHub works as a drop-in.
 - `-destination 'platform=iOS Simulator,name=iPhone 15'` is ambiguous here (many runtimes). Pick a UDID from
   `xcrun simctl list devices available -j` and pass `id=<udid>`; CI does the same.
 - Swift wrapper is `@MainActor NavigationSession: ObservableObject`; Rust calls run on a private serial queue. The
