@@ -204,27 +204,103 @@ pub enum TripProgress {
     Arrived,
 }
 
-/// Everything the host UI needs after each accepted location update.
-#[derive(Debug, Clone, PartialEq)]
+/// The part of the trip state that changes on every accepted fix.
+///
+/// Small and `Copy`, so it is cheap to hand out at GNSS rate. Hosts that only
+/// care about the slow-changing part should watch [`TripState`] instead.
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct TripState {
+pub struct PositionState {
     /// Snapped position.
     pub snapped: SnappedLocation,
-    /// Index into `Route::steps` of the step currently being driven.
-    pub current_step_index: usize,
     /// Distance along the route to the end of the current step, metres.
     pub distance_to_next_maneuver_m: f64,
     /// Distance along the route from the snapped position to the destination, metres.
     pub distance_remaining_m: f64,
+    /// True after enough consecutive fixes beyond the off-route distance.
+    /// Repeated from [`TripState`] so position-only consumers can show a badge.
+    pub is_off_route: bool,
+    /// Coarse lifecycle. Repeated from [`TripState`].
+    pub progress: TripProgress,
+}
+
+/// Why the core asks for a new route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum RerouteReason {
+    /// The vehicle is off-route; the host should fetch a route from `origin`
+    /// to `destination` and call `set_route`.
+    OffRoute,
+    /// `NavigatorConfig::max_reroute_attempts` requests went unanswered. This
+    /// is informational: the host should not fetch again.
+    GaveUp,
+}
+
+/// A request from the core to the host to fetch a new route.
+///
+/// Appears in [`TripState::reroute`] only on the update that issues it (an
+/// edge, not a level). The core keeps the request pending until
+/// `set_route` is called or the vehicle rejoins the route.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct RerouteRequest {
+    /// Filtered vehicle position to route from.
+    pub origin: GeoPoint,
+    /// Filtered heading, degrees clockwise from north, if moving.
+    pub heading_deg: Option<f64>,
+    /// Final vertex of the active route.
+    pub destination: GeoPoint,
+    /// 1 for the first request since the route was set, then 2, 3, …
+    pub attempt: u32,
+    /// Why this request was issued.
+    pub reason: RerouteReason,
+    /// Timestamp of the fix that triggered the request, milliseconds.
+    pub timestamp_ms: u64,
+}
+
+/// The part of the trip state that changes rarely: on step advance,
+/// off-route transitions, arrival and reroute requests.
+///
+/// Cloning shares the instruction string, so it does not allocate.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct TripState {
+    /// Index into `Route::steps` of the step currently being driven.
+    pub current_step_index: usize,
+    /// Number of steps in the active route.
+    pub step_count: usize,
     /// Instruction for the upcoming manoeuvre (the next step's instruction;
     /// on the final step, its own). Shared, so cloning does not allocate.
     pub next_instruction: Arc<str>,
     /// True after enough consecutive fixes beyond the off-route distance.
     pub is_off_route: bool,
-    /// True when the core wants the host to fetch a new route and call `set_route`.
-    pub needs_reroute: bool,
     /// Coarse lifecycle.
     pub progress: TripProgress,
+    /// Set only on the update that issues a reroute request.
+    pub reroute: Option<RerouteRequest>,
+}
+
+/// Both halves of the state together: what the pull-style API returns.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct FullState {
+    /// Per-fix part.
+    pub position: PositionState,
+    /// Slow-changing part.
+    pub trip: TripState,
+}
+
+impl FullState {
+    /// Convenience: true on the update that issues a reroute request.
+    pub fn needs_reroute(&self) -> bool {
+        matches!(
+            self.trip.reroute,
+            Some(RerouteRequest {
+                reason: RerouteReason::OffRoute,
+                ..
+            })
+        )
+    }
 }
 
 /// All errors the core can produce. Mirrored 1:1 by the UniFFI error enum.

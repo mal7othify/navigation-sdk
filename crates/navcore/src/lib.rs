@@ -13,10 +13,12 @@ pub mod fixtures;
 pub mod geo;
 pub mod matcher;
 pub mod navigator;
+pub mod sim;
 pub mod types;
 
-pub use navigator::{Navigator, NavigatorConfig};
+pub use navigator::{Navigator, NavigatorConfig, Update};
+pub use sim::{PlannedDeviation, RouteSimulator, SimulatorConfig};
 pub use types::{
-    GeoPoint, ManeuverType, NavError, RawLocation, Route, RouteStep, SnappedLocation, TripProgress,
-    TripState,
+    FullState, GeoPoint, ManeuverType, NavError, PositionState, RawLocation, RerouteReason,
+    RerouteRequest, Route, RouteStep, SnappedLocation, TripProgress, TripState,
 };
