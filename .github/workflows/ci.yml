@@ -35,6 +35,9 @@ jobs:
       - uses: taiki-e/cache-cargo-install-action@v2
         with:
           tool: cargo-ndk
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: boltffi_cli
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -43,15 +46,24 @@ jobs:
         with:
           packages: platform-tools platforms;android-36 build-tools;35.0.0 ndk;28.2.13676358
       - uses: gradle/actions/setup-gradle@v4
-      - name: cross-compile + bindings
+      - name: "A (pull): cross-compile + UniFFI bindings"
         run: scripts/build-android.sh
+      - name: "B (push): cross-compile + BoltFFI bindings + desktop JNI library"
+        run: scripts/build-boltffi-android.sh
       - name: gradle
         working-directory: android
-        run: ./gradlew :navsdk:assembleRelease :demo:assembleDebug :navsdk:testDebugUnitTest --console=plain
+        run: >-
+          ./gradlew :navsdk:assembleRelease :navsdk-push:assembleRelease :demo:assembleDebug
+          :navsdk:testDebugUnitTest :navsdk-push:testDebugUnitTest --console=plain
+      - name: boundary benchmark (JVM)
+        run: SKIP_IOS=1 scripts/bench-boundary.sh
       - uses: actions/upload-artifact@v4
         with:
           name: navsdk-android
-          path: android/navsdk/build/outputs/aar/*.aar
+          path: |
+            android/navsdk/build/outputs/aar/*.aar
+            android/navsdk-push/build/outputs/aar/*.aar
+            android/demo/build/boundary-bench.md
 
   ios:
     name: iOS XCFramework + simulator tests
@@ -63,8 +75,13 @@ jobs:
         with:
           targets: aarch64-apple-ios-sim, x86_64-apple-ios
       - uses: Swatinem/rust-cache@v2
-      - name: build xcframework (simulator only) + bindings
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: boltffi_cli
+      - name: "A (pull): xcframework (simulator only) + UniFFI bindings"
         run: SKIP_DEVICE=1 scripts/build-ios.sh
+      - name: "B (push): xcframework + BoltFFI bindings"
+        run: scripts/build-boltffi-ios.sh
       - name: pick a simulator
         id: sim
         run: |
@@ -91,4 +108,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: navsdk-ios
-          path: ios/NavSDK/NavCoreFFI.xcframework
+          path: |
+            ios/NavSDK/NavCoreFFI.xcframework
+            ios/NavSDKPush/NavCorePush.xcframework

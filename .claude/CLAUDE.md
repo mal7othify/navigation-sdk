@@ -58,9 +58,18 @@ scripts/check.sh                 # fmt --check, clippy -D warnings, test  (must 
 cargo test -p navcore            # core only
 cargo bench -p navcore           # geometry / matcher / navigator benchmarks (Phase 1+)
 scripts/gen-bindings.sh          # regenerate Kotlin + Swift bindings (Phase 5+)
-scripts/build-android.sh         # cross-compile + bindings → android/navsdk (Phase 6+)
-scripts/build-ios.sh             # XCFramework + bindings → ios/NavSDK (Phase 7+)
+scripts/build-android.sh         # A (pull): cross-compile + UniFFI bindings → android/navsdk (Phase 6+)
+scripts/build-ios.sh             # A (pull): XCFramework + bindings → ios/NavSDK (Phase 7+)
+scripts/build-boltffi-android.sh # B (push): boltffi pack android → android/navsdk-push (Phase 11+)
+scripts/build-boltffi-ios.sh     # B (push): boltffi pack apple → ios/NavSDKPush (Phase 11+)
+scripts/bench-boundary.sh        # Phase 14: FFI boundary µs per call, JVM + Swift
+scripts/measure-sizes.sh         # Phase 14: library sizes and generated/wrapper line counts
 ```
+
+Plan v2 (`docs/PLAN-v2-pull-vs-push.md`) added a second, complete binding layer so the two can be compared on the
+same core: **A, pull** (`navcore-ffi`, UniFFI + JNA, host calls `update_location`) and **B, push**
+(`navcore-boltffi`, BoltFFI + JNI, host subscribes to listeners, the core calls the host's `ReplanningService`).
+The demos have Pull / Push / Both tabs; Both feeds one trace to both sessions in lockstep and flags divergence.
 
 Layout notes:
 
@@ -75,8 +84,16 @@ regenerate, then update the Kotlin/Swift wrappers.
 
 Decisions made while resolving gaps in the plan (keep consistent):
 
-- `TripState` has a `needs_reroute: bool` field. It is an edge flag: true only on the update that issues a
-  (rate-limited) reroute request.
+- Plan v2 (`docs/PLAN-v2-pull-vs-push.md`) splits the state in two: `PositionState` (every fix, `Copy`) and
+  `TripState` (step index, instruction, off-route, progress, reroute). `Navigator::update_location` returns
+  `Update { position, trip, trip_changed }`; `trip_changed` is true exactly when the trip state differs from the
+  previous update's or carries a reroute request. The pull API returns `FullState { position, trip }`.
+- `TripState.reroute: Option<RerouteRequest>` replaces the old `needs_reroute` bool. It is an edge: `Some` only on the
+  update that issues a request. The core owns the policy (grace period, min speed/movement, consecutive fixes,
+  rate-limited retries up to `max_reroute_attempts`, then one `RerouteReason::GaveUp`); `set_route` answers a
+  pending request and resets the attempt counter; rejoining the route on your own drops it.
+- `navcore::sim::RouteSimulator` is the one simulator (seeded xorshift64\*, no `rand`). `gen_fixtures` uses its
+  `Rng`, and the fixtures were verified byte-identical after the switch.
 - `TripState.next_instruction` is `Arc<str>` in the core (no allocation per update); the FFI layer copies to `String`.
 - `TripProgress` is an enum: `NotStarted`, `Navigating`, `Arrived`. `NotStarted` never appears in a returned state; it
   exists for host-side defaults.
