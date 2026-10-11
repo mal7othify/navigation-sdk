@@ -31,8 +31,83 @@ fn json_roundtrip_and_navigate() {
         };
         last = Some(nav.update_location(raw).expect("plausible fix"));
     }
-    assert_eq!(last.expect("states").progress, TripProgress::Arrived);
-    assert!(nav.state().is_some());
+    let last = last.expect("states");
+    assert_eq!(last.trip.progress, TripProgress::Arrived);
+    assert_eq!(last.position.progress, TripProgress::Arrived);
+    assert_eq!(last.trip.step_count as usize, fixture.route.steps.len());
+    assert!(last.trip.reroute.is_none());
+    let state = nav.state().expect("state after updates");
+    assert_eq!(state.position, last.position);
+    assert_eq!(state.trip, last.trip);
+    assert_eq!(nav.position(), Some(last.position));
+    assert_eq!(nav.trip(), Some(last.trip));
+    assert!(nav.pending_reroute().is_none());
+    assert_eq!(nav.reroute_attempts(), 0);
+}
+
+#[test]
+fn detour_surfaces_reroute_request_and_set_route_answers_it() {
+    let json = std::fs::read_to_string(navcore::fixtures::fixtures_dir().join("route_detour.json"))
+        .expect("fixture present");
+    let fixture = navcore::fixtures::Fixture::from_json(&json).expect("valid fixture");
+    let route = route_from_json(&serde_json_route(&fixture.route)).expect("route parses");
+    let nav = Navigator::new(route.clone(), NavigatorConfig::default()).expect("navigator");
+    let mut request = None;
+    for raw in &fixture.trace {
+        let raw = RawLocation {
+            point: raw.point.into(),
+            accuracy_m: raw.accuracy_m,
+            speed_mps: raw.speed_mps,
+            course_deg: raw.course_deg,
+            timestamp_ms: raw.timestamp_ms,
+        };
+        let state = nav.update_location(raw).expect("plausible fix");
+        if let Some(req) = state.trip.reroute {
+            assert!(state.trip_changed);
+            request = Some(req);
+            break;
+        }
+    }
+    let request = request.expect("detour must request a reroute");
+    assert_eq!(request.reason, RerouteReason::OffRoute);
+    assert_eq!(request.attempt, 1);
+    assert_eq!(nav.pending_reroute(), Some(request));
+    assert_eq!(nav.reroute_attempts(), 1);
+    nav.set_route(route).expect("route installs");
+    assert!(nav.pending_reroute().is_none());
+    assert_eq!(nav.reroute_attempts(), 0);
+    assert!(nav.state().is_none());
+}
+
+#[test]
+fn simulator_is_deterministic_and_drives_navigator_to_arrival() {
+    let json = std::fs::read_to_string(navcore::fixtures::fixtures_dir().join("route_simple.json"))
+        .expect("fixture present");
+    let fixture = navcore::fixtures::Fixture::from_json(&json).expect("valid fixture");
+    let route = route_from_json(&serde_json_route(&fixture.route)).expect("route parses");
+    let cfg = SimulatorConfig::default();
+    let a = RouteSimulator::new(route.clone(), cfg).expect("sim");
+    let b = RouteSimulator::new(route.clone(), cfg).expect("sim");
+    assert_eq!(a.next_fix(), b.next_fix());
+    a.reset();
+    assert_eq!(a.fixes_emitted(), 0);
+
+    let nav = Navigator::new(route, NavigatorConfig::default()).expect("navigator");
+    let mut last = None;
+    for _ in 0..5000 {
+        let fix = a.next_fix();
+        last = Some(nav.update_location(fix).expect("simulated fix accepted"));
+        if a.is_finished()
+            && last.as_ref().map(|s| s.position.progress) == Some(TripProgress::Arrived)
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        last.expect("states").position.progress,
+        TripProgress::Arrived
+    );
+    assert!(a.distance_along_m() >= a.route_length_m());
 }
 
 #[test]
